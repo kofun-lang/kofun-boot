@@ -11,9 +11,18 @@ the `Unmeasured at this release` section added as a local requirement.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-08-08
+
+Router captures, a runtime capability manifest, and protocol status decisions
+are now executable and replayed evidence rather than documentation-only
+contracts. This release also publishes the repository documentation from
+`docs/` without changing the research-pack inputs.
+
 ### Added
 
-- **Path captures in the Stage 2 seed** ([#13](https://github.com/hjosugi/kofun-boot/issues/13)) —
+- **Path captures in the Stage 2 seed** ([#13](https://github.com/kofun-lang/kofun-boot/issues/13)) —
   a route slot carries a capture flag, and a dispatch reports the segment the
   route captured. `GET /things/{id}` is the first capturing slot: it matches
   the family of paths sharing its base and reports `7` out of `104007`, so the
@@ -33,7 +42,7 @@ the `Unmeasured at this release` section added as a local requirement.
   not the only one that type-checks.
 
 - **The effective capability manifest, printed by the binary**
-  ([#33](https://github.com/hjosugi/kofun-boot/issues/33)) — the shell prints
+  ([#33](https://github.com/kofun-lang/kofun-boot/issues/33)) — the shell prints
   what was granted, with what scope, before the first effect and not behind a
   flag. Denied capabilities are printed as denied, because a set listing only
   grants cannot be read for absence. `net.listen`, `net.connect` and `fs` are
@@ -53,6 +62,21 @@ the `Unmeasured at this release` section added as a local requirement.
   revision would change on every commit, churning a byte-compared golden and
   making two manifests differ whenever anything had been committed between
   them; this changes exactly when the capability surface changes.
+- **The mock resource's status mapping**
+  ([#34](https://github.com/kofun-lang/kofun-boot/issues/34), partial) — every
+  `MockOutcome` maps to exactly one HTTP status through an exhaustive match.
+  `Full` is 409 rather than 507, `Deleted` is 204, and no domain outcome maps
+  into 5xx.
+- **[ADR 7](docs/adr/0007-a-full-resource-is-a-conflict-not-a-storage-failure.md)** —
+  records why a full bounded resource is a client-resolvable conflict rather
+  than a server storage failure.
+- **A seed digest in the session trace** (`scripts/seed-digest.sh`) — replay
+  verifies the seed before the first step, so editing a seed produces a named
+  digest mismatch instead of an unrelated row divergence.
+- **A GitHub Pages documentation entry point** — `docs/index.md` routes readers
+  through installation, the development loop, architecture, decisions, and
+  research; `_config.yml` renders the existing Markdown without adding front
+  matter that would change the deterministic research pack.
 
 ### Changed
 
@@ -66,10 +90,16 @@ the `Unmeasured at this release` section added as a local requirement.
   said what it said — a changed rule was caught by `cmp` as "output differs"
   and named nothing. The golden comparison now runs last, after every named
   decision, which is what lets a broken rule fail by the name of the rule.
+- **The session trace is `kofun-boot.trace/v2`** — status is the ninth column,
+  and two additional steps fill the resource so the 409 decision is exercised
+  during byte-for-byte replay.
+- **The freed-id check selects by outcome rather than operation.** The last
+  create can now be the one refused as full, whose payload is a capacity rather
+  than an allocated id.
 
 ### Gates
 
-- 42/42 module-owned tests pass across three suites.
+- 47/47 module-owned tests pass across three suites.
 - The gate runs the binary and asserts named rows out of the printed manifest,
   never by reading the source: a source-derived manifest proves what the source
   says, and the question is what the artifact does.
@@ -84,6 +114,26 @@ the `Unmeasured at this release` section added as a local requirement.
   identically.
 - A capturing base that collides with a literal route code fails the gate;
   nothing else forbids it yet.
+- Every mock outcome reaches the trace, maps to exactly one status, and none is
+  5xx. Mapping `Full` to 507 fails the server-error rule; removing an arm is a
+  compiler error because the match is exhaustive.
+
+### Unmeasured at this release
+
+- Speed — L5; the benchmark harness exists and refuses to produce a number it
+  does not trust, but no baseline has been recorded.
+- Desktop lighter than Tauri — L9; blocked on the language's wasm32 activation
+  lanes, and gated behind IME and accessibility conformance before any number
+  is recorded ([#29](https://github.com/kofun-lang/kofun-boot/issues/29)).
+
+### Known boundaries
+
+- Binding mock statuses to real HTTP responses waits on
+  [#2](https://github.com/kofun-lang/kofun-boot/issues/2), which owns handler
+  registration. The `boot mock` CLI flags likewise wait on
+  [#8](https://github.com/kofun-lang/kofun-boot/issues/8).
+- The Stage 2 seed captures one encoded path segment; text segments and
+  multi-capture routes remain in the canonical surface only.
 
 ## [0.4.1] - 2026-08-07
 

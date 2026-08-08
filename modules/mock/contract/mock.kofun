@@ -53,3 +53,15 @@ fn mock_apply(
 ) -> MockTransition {
     ...
 }
+
+# The protocol projection: one status per outcome, total over the closed sum.
+# A constructor added to MockOutcome without a status here does not compile,
+# which is what keeps a new domain answer from reaching the wire as a default.
+#
+# Full is 409 rather than 507 and Deleted is 204; both are decided in
+# docs/adr/0007-a-full-resource-is-a-conflict-not-a-storage-failure.md.
+# A refusal is an answer, so no outcome here maps into 5xx: the server is
+# working exactly as specified when it says the resource is full.
+fn mock_status(outcome: MockOutcome) -> Int {
+    ...
+}

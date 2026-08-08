@@ -18,8 +18,10 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
-FORMAT=kofun-boot.trace/v1
-COLUMNS='step op arg_id arg_value outcome payload live next_id'
+# v2 adds the status column. The format is versioned so this is a refusal
+# rather than a column that silently shifts under a reader.
+FORMAT=kofun-boot.trace/v2
+COLUMNS='step op arg_id arg_value outcome payload live next_id status'
 
 fail() {
     printf 'trace: %s\n' "$*" >&2
@@ -43,7 +45,11 @@ run_session() {
     # An empty environment, because a trace recorded under one environment and
     # replayed under another must not be able to differ for that reason. If it
     # ever does, the divergence is real and the gate should see it.
-    env -i "$binary" | paste - - - - - - - -
+    env -i "$binary" | paste - - - - - - - - -
+}
+
+seed_digest() {
+    sh "$ROOT/scripts/seed-digest.sh"
 }
 
 language_revision() {
@@ -60,6 +66,7 @@ case "${1:-}" in
             printf '# format: %s\n' "$FORMAT"
             printf '# columns: %s\n' "$COLUMNS"
             printf '# seed: seeded_store\n'
+            printf '# seed-digest: %s\n' "$(seed_digest)"
             printf '# language: %s\n' "$(language_revision)"
             printf '# digest: %s\n' "$(digest_of "$work/steps")"
             cat "$work/steps"
@@ -78,6 +85,20 @@ case "${1:-}" in
         recorded_format=$(sed -n 's/^# format: //p' "$trace" | head -1)
         test "$recorded_format" = "$FORMAT" ||
             fail "trace format is '$recorded_format', this tool speaks '$FORMAT'"
+
+        # The seed, before any step is compared. A trace of a different
+        # resource is not a divergence at step 1 — it is a different trace, and
+        # saying so is the difference between a one-line answer and twenty
+        # minutes spent reading rows that were never supposed to match.
+        recorded_seed=$(sed -n 's/^# seed-digest: //p' "$trace" | head -1)
+        test -n "$recorded_seed" ||
+            fail "the trace records no seed digest; it predates $FORMAT and cannot be shown to be a replay of this seed"
+        current_seed=$(seed_digest)
+        test "$recorded_seed" = "$current_seed" ||
+            fail "seed digest mismatch: this trace was recorded against a different seeded_store()
+  trace says   $recorded_seed
+  the seed is  $current_seed
+  re-record the trace, or replay it against the seed it was taken from"
 
         recorded_digest=$(sed -n 's/^# digest: //p' "$trace" | head -1)
         grep -v '^#' "$trace" >"$work/recorded"

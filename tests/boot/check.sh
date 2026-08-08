@@ -850,8 +850,73 @@ then
     fail 'the mock core names ambient state'
 fi
 
+# The canonical surface must declare the protocol projection too. Without it
+# the seed would be the only place a status is decided, and the contract would
+# describe a domain that cannot answer a request.
+require_line 'mock canonical surface lost the status projection' \
+    'fn mock_status(outcome: MockOutcome) -> Int {' "$mock_contract"
+
+# The mapping is a match over the closed sum, not a lookup with a fallback. A
+# default arm would give a new constructor a status nobody decided, which is
+# exactly what the closed sum exists to prevent — so the seed must carry one
+# arm per outcome and no more.
+sed -n '/^fn mock_status(outcome: MockOutcome) -> Int {$/,/^}$/p' "$mock_core" \
+    >"$WORK/mock.status"
+test -s "$WORK/mock.status" || fail 'the mock seed has no status mapping'
+arms=$(grep -cE '^        [A-Z][A-Za-z]*\(_\) => \{ status = [0-9]+ \},$' \
+    "$WORK/mock.status")
+test "$arms" -eq 7 ||
+    fail "the status mapping has $arms arms for 7 outcomes; every outcome must name its own status"
+if grep -qE '^        _ =>' "$WORK/mock.status"; then
+    fail 'the status mapping has a catch-all arm; a new outcome would inherit a status nobody decided'
+fi
+
 printf 'boot: the core cannot construct a capability, and does not own main: PASS\n'
 printf 'boot: mock business rules are a closed sum and every refusal carries what was observed: PASS\n'
+printf 'boot: the status mapping is one decided arm per outcome, with no default: PASS\n'
+
+# Break the two decisions ADR 7 records, and prove the rules above would reject
+# the result. These build a mutated mock directly rather than recursing: the
+# rules are one-line predicates over the trace, so running the same predicate
+# against the mutated output is the whole test.
+if test "${MOCK_SKIP_BREAK_TEST:-0}" != 1; then
+    mock_break() {
+        rm -rf "$WORK/mock-break"
+        cp -R "$ROOT/modules/mock" "$WORK/mock-break"
+        sed -i "$1" "$WORK/mock-break/core/mock.kofun"
+        cat "$WORK/mock-break/core/mock.kofun" >"$WORK/mock-break.kofun"
+        printf '\n' >>"$WORK/mock-break.kofun"
+        cat "$WORK/mock-break/shell/mock.kofun" >>"$WORK/mock-break.kofun"
+    }
+
+    # Full as a storage failure. The rule is "no outcome maps into 5xx", so the
+    # break is proved live by that same predicate matching something.
+    mock_break 's/Full(_) => { status = 507 }/&/;s/Full(_) => { status = 409 }/Full(_) => { status = 507 }/'
+    "$KOFUN" build "$WORK/mock-break.kofun" -o "$WORK/mock-507" \
+        >"$WORK/mock-507.build" 2>&1 ||
+        fail "the 507 break did not build: $(cat "$WORK/mock-507.build")"
+    env -i "$WORK/mock-507" | paste - - - - - - - - - >"$WORK/mock-507.trace"
+    broke=$(awk -F'\t' '$9 >= 500 { print $1 ": " $9 }' "$WORK/mock-507.trace")
+    test -n "$broke" ||
+        fail 'mapping Full to 507 produced no 5xx; the server-error rule is checking nothing'
+    test "$(awk -F'\t' '$5 == 7 { print $9 }' "$WORK/mock-507.trace" | sort -u)" = 507 ||
+        fail 'the 507 break did not reach the Full outcome; the session no longer fills the resource'
+
+    # An outcome with no arm. This one the compiler refuses, which is the
+    # property the closed sum exists for: a new domain answer cannot reach the
+    # wire without someone deciding its status.
+    mock_break '/        Full(_) => { status = 409 },/d'
+    if "$KOFUN" check "$WORK/mock-break.kofun" \
+        >"$WORK/mock-arm.stdout" 2>"$WORK/mock-arm.stderr"
+    then
+        fail 'an outcome with no status arm compiled; the mapping is not total'
+    fi
+    require_line 'a missing status arm was not refused as non-exhaustive' \
+        'non-exhaustive enum `MockOutcome` match; missing constructors `Full`' \
+        "$WORK/mock-arm.stderr"
+
+    printf 'boot: a 5xx refusal and an undecided outcome both fail, the second at compile time: PASS\n'
+fi
 # ------------------------------------------------- the OpenAPI projection
 #
 # The document is generated from the twelve lines the router printed, so it
@@ -899,17 +964,81 @@ sh "$ROOT/scripts/trace.sh" replay "$trace" >"$WORK/replay.log" 2>&1 ||
     fail "the recorded session did not replay:
 $(sed 's/^/    /' "$WORK/replay.log")"
 
-# A create after a delete must not reuse the freed id: two resources sharing
-# an id are indistinguishable in a replay, which would make every trace above
-# worth less than it looks. Read from the trace rather than trusted.
-freed=$(grep -v '^#' "$trace" | awk -F'\t' '$5 == 5 { print $6 }' | head -1)
-allocated=$(grep -v '^#' "$trace" | awk -F'\t' '$2 == 3 { print $6 }' | tail -1)
-test -n "$freed" && test -n "$allocated" ||
-    fail 'the trace no longer contains both a delete and a later create'
-test "$freed" != "$allocated" ||
-    fail "a create reused the id a delete freed ($freed); ids must be spent"
+# A create must not reuse an id a delete freed: two resources sharing an id are
+# indistinguishable in a replay, which would make every trace above worth less
+# than it looks. Read from the trace rather than trusted.
+#
+# Selected by *outcome* rather than by operation. The session ends with a
+# create that was refused as Full, whose payload is the capacity — reading the
+# last create by operation kind would compare an id against a capacity and pass
+# without checking anything.
+freed=$(grep -v '^#' "$trace" | awk -F'\t' '$5 == 5 { print $6 }')
+allocated=$(grep -v '^#' "$trace" | awk -F'\t' '$5 == 3 { print $6 }')
+test -n "$freed" || fail 'the trace no longer contains a delete'
+test -n "$allocated" || fail 'the trace no longer contains a successful create'
+for id in $freed; do
+    for made in $allocated; do
+        test "$id" != "$made" ||
+            fail "a create reused the id a delete freed ($id); ids must be spent"
+    done
+done
 
 printf 'boot: a recorded session replays byte-identically, and freed ids stay spent: PASS\n'
+
+# ---------------------------------------------------- the status mapping
+#
+# Read out of the trace, which the replay above proved is what the binary
+# emits. The mapping is therefore compared byte-for-byte on every run rather
+# than asserted once somewhere else and left to drift.
+
+status_for() {
+    grep -v '^#' "$trace" | awk -F'\t' -v want="$1" '$5 == want { print $9 }' |
+        sort -u
+}
+
+# Every outcome constructor reaches the trace. A mapping is only gated for the
+# outcomes something actually produced, so this is what stops the other
+# assertions from silently covering five of seven.
+for kind in 1 2 3 4 5 6 7; do
+    test -n "$(status_for "$kind")" ||
+        fail "outcome kind $kind never appears in the session; its status is mapped but never exercised"
+done
+
+# One status per outcome. Two different statuses for one constructor means the
+# mapping is reading something other than the outcome.
+for kind in 1 2 3 4 5 6 7; do
+    count=$(status_for "$kind" | wc -l | tr -d ' ')
+    test "$count" -eq 1 ||
+        fail "outcome kind $kind maps to $count different statuses: $(status_for "$kind" | tr '\n' ' ')"
+done
+
+assert_status() {
+    label=$1
+    kind=$2
+    want=$3
+    got=$(status_for "$kind")
+    test "$got" = "$want" ||
+        fail "$label: expected $want, got $got"
+}
+
+assert_status 'a collection is 200' 1 200
+assert_status 'a found item is 200' 2 200
+assert_status 'a create names its allocation with 201' 3 201
+assert_status 'an update is 200' 4 200
+# ADR 7. Both of these are decisions rather than conventions, so both are read
+# by name — a silent change to either is the thing this check exists for.
+assert_status 'a delete is 204 and the id stays in the trace, not the body' 5 204
+assert_status 'a missing id is 404' 6 404
+assert_status 'a full resource is 409, a conflict the caller can resolve' 7 409
+
+# A refusal is an answer. No outcome may map into 5xx: the server saying "this
+# resource is full" is the server working, and a status class that says
+# otherwise trains everyone to ignore the class that means something is broken.
+server_errors=$(grep -v '^#' "$trace" | awk -F'\t' '$9 >= 500 { print $1 ": " $9 }')
+test -z "$server_errors" ||
+    fail "a domain outcome mapped into the server-error class: $server_errors"
+
+printf 'boot: every outcome maps to one decided status, and no refusal is a 5xx: PASS\n'
 
 # ------------------------------------------------ the TypeScript client
 #

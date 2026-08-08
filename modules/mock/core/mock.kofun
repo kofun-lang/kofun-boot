@@ -197,6 +197,44 @@ fn outcome_kind(outcome: MockOutcome) -> Int {
     return kind
 }
 
+# ------------------------------------------------------- the status mapping
+#
+# Every domain outcome has exactly one HTTP status, and the mapping is a match
+# on the closed sum rather than a table of codes. That is the point: adding a
+# constructor to MockOutcome without deciding its status does not compile, so
+# a new domain answer cannot reach the wire as a default 200 or a 500.
+#
+# Status lives in the core because the router core already carries
+# `Response.status` — the protocol projection is pure, and splitting it across
+# layers would put half a decision in each.
+#
+# Two of these are decisions rather than conventions, recorded in ADR 7:
+#
+#   Full -> 409, not 507. A full resource is not a server malfunction; the
+#   server is behaving exactly as specified, and 507 is 5xx, which would page
+#   an operator for a working system. The client can also *fix* it, by
+#   deleting a row — that is a conflict with the current state of the
+#   resource, which is what 409 means. 507 says the server cannot store the
+#   representation, and would be a lie about whose problem it is.
+#
+#   Deleted -> 204. The outcome carries the id, and 204 discards it. The id
+#   stays in the domain answer and in the trace, where it is what proves a
+#   freed id is never reissued; HTTP simply has no place to put it on a
+#   successful delete. Where the two models differ, this is the seam.
+fn mock_status(outcome: MockOutcome) -> Int {
+    let mut status = 0
+    match outcome {
+        Collection(_) => { status = 200 },
+        Item(_) => { status = 200 },
+        Created(_) => { status = 201 },
+        Updated(_) => { status = 200 },
+        Deleted(_) => { status = 204 },
+        Missing(_) => { status = 404 },
+        Full(_) => { status = 409 },
+    }
+    return status
+}
+
 fn outcome_payload(outcome: MockOutcome) -> Int {
     let mut payload = 0
     match outcome {

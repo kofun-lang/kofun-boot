@@ -15,15 +15,23 @@
 #   outcome   the closed outcome kind
 #   payload   what that outcome carried
 #
-# and then two more describing the resource the step produced:
+# then two describing the resource the step produced:
 #
 #   live      how many rows are live
 #   next_id   the counter, which is what makes creates deterministic
 #
-# Eight integers per step, nothing else. A format a reader can diff by eye and
+# and the status that outcome maps to:
+#
+#   status    the HTTP status, from the core's total mapping
+#
+# Nine integers per step, nothing else. A format a reader can diff by eye and
 # a script can compare by line is worth more than one that needs a parser to
 # be understood, and this one costs nothing to produce because the core
 # already returns every number in it.
+#
+# The status is in the trace rather than checked once, so the mapping is
+# replayed and compared byte-for-byte on every run. A mapping asserted in a
+# single test is a mapping that drifts between the test and the wire.
 
 fn emit_step(step_number: Int, op: Operation, transition: StoreStep) -> Int {
     let after: Store = step_store(transition)
@@ -36,6 +44,7 @@ fn emit_step(step_number: Int, op: Operation, transition: StoreStep) -> Int {
     print(outcome_payload(outcome))
     print(live_count(after))
     print(after.next_id)
+    print(mock_status(outcome))
     return 0
 }
 
@@ -82,6 +91,19 @@ fn main() -> Int {
     let op7: Operation = operation(op_create(), 0, 55)
     let t7: StoreStep = apply(s6, op7)
     emit_step(7, op7, t7)
+    let s7: Store = step_store(t7)
+
+    # Fill the last slot, then ask for one more. Without these two steps the
+    # trace never reaches Full, and 409 — the one status this module actually
+    # had to decide — would be mapped but never exercised.
+    let op8: Operation = operation(op_create(), 0, 77)
+    let t8: StoreStep = apply(s7, op8)
+    emit_step(8, op8, t8)
+    let s8: Store = step_store(t8)
+
+    let op9: Operation = operation(op_create(), 0, 88)
+    let t9: StoreStep = apply(s8, op9)
+    emit_step(9, op9, t9)
 
     return 0
 }

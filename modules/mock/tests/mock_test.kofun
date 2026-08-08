@@ -136,6 +136,68 @@ fn test_a_full_resource_names_its_capacity() -> Int {
     return failures
 }
 
+# ------------------------------------------------------- the status mapping
+#
+# ADR 7. Two of these are decisions rather than conventions and are asserted
+# for the value the ADR argues for, not merely for being in a plausible class.
+
+fn test_a_full_resource_is_a_conflict_not_a_storage_failure() -> Int {
+    let mut failures = 0
+    # 409, not 507: the caller can free a slot and retry, so it is a conflict
+    # with the resource's current state rather than the server being unable to
+    # store anything.
+    failures = failures + expect_eq_int(mock_status(Full(capacity())), 409)
+    # And emphatically not 5xx. The server is working exactly as specified.
+    failures = failures + expect_between_int(mock_status(Full(capacity())), 400, 499)
+    return failures
+}
+
+fn test_a_delete_is_no_content_though_the_outcome_carries_the_id() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(mock_status(Deleted(2)), 204)
+    # The id stays in the domain answer even though the status drops it; that
+    # is what the trace reads to prove a freed id is never reissued.
+    failures = failures + expect_eq_int(outcome_payload(Deleted(2)), 2)
+    return failures
+}
+
+fn test_every_outcome_has_its_decided_status() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(mock_status(Collection(2)), 200)
+    failures = failures + expect_eq_int(mock_status(Item(30)), 200)
+    failures = failures + expect_eq_int(mock_status(Created(3)), 201)
+    failures = failures + expect_eq_int(mock_status(Updated(1)), 200)
+    failures = failures + expect_eq_int(mock_status(Deleted(2)), 204)
+    failures = failures + expect_eq_int(mock_status(Missing(9)), 404)
+    failures = failures + expect_eq_int(mock_status(Full(capacity())), 409)
+    return failures
+}
+
+# A refusal is an answer. Nothing the domain can say is a server error — a
+# transport or storage failure would be Result.Err at an adapter boundary and
+# is not a MockOutcome at all.
+fn test_no_outcome_is_a_server_error() -> Int {
+    let mut failures = 0
+    failures = failures + expect_between_int(mock_status(Collection(0)), 200, 499)
+    failures = failures + expect_between_int(mock_status(Item(0)), 200, 499)
+    failures = failures + expect_between_int(mock_status(Created(0)), 200, 499)
+    failures = failures + expect_between_int(mock_status(Updated(0)), 200, 499)
+    failures = failures + expect_between_int(mock_status(Deleted(0)), 200, 499)
+    failures = failures + expect_between_int(mock_status(Missing(0)), 200, 499)
+    failures = failures + expect_between_int(mock_status(Full(0)), 200, 499)
+    return failures
+}
+
+# The status is a function of the outcome and nothing else: the same
+# constructor carries the same status whatever it happens to be carrying.
+fn test_the_status_does_not_depend_on_the_payload() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(mock_status(Missing(1)), mock_status(Missing(9999)))
+    failures = failures + expect_eq_int(mock_status(Created(1)), mock_status(Created(4)))
+    failures = failures + expect_eq_int(mock_status(Full(0)), mock_status(Full(4)))
+    return failures
+}
+
 # A session is a fold. This is the shape that makes an integration test
 # replayable: same seed, same operations, same final resource.
 fn test_a_session_is_a_fold_and_replays() -> Int {

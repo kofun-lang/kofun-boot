@@ -132,7 +132,8 @@ fed `Msg`, expected `Cmd`, and emitted `Cmd`.
 
 There was no trace format to design. `apply` already returns the resource and
 what happened, so a session is a fold and a trace is the list of steps in it —
-eight integers a reader can diff by eye.
+nine integers a reader can diff by eye, the ninth being the HTTP status the
+outcome maps to.
 
 ```sh
 sh scripts/trace.sh record            # write contracts/session.trace
@@ -145,13 +146,42 @@ json-server behaviour this design exists to avoid — produces:
 
 ```
 trace: FAIL: the session diverged at step 5
-  columns:  step op arg_id arg_value outcome payload live next_id
-  recorded: 5 5 2 0 5 2 2 4
-  replayed: 5 5 2 0 5 2 2 2
+  columns:  step op arg_id arg_value outcome payload live next_id status
+  recorded: 5 5 2 0 5 2 2 4 204
+  replayed: 5 5 2 0 5 2 2 2 204
 ```
 
 Caught where it happened, not as a mysterious id collision two steps later.
-Editing the trace by hand is refused separately, by its digest.
+Editing the trace by hand is refused separately, by its digest — and replaying
+it against a *different seed* is refused before step 1, by the seed's own
+digest, because "this is a trace of another resource" is a different answer
+from "row 1 does not match".
+
+### Status — a rejection is an answer, not an error
+
+Every domain outcome maps to exactly one status, and the mapping is a match
+over the closed sum rather than a table of codes. Adding a constructor to
+`MockOutcome` without deciding its status **does not compile**:
+
+```
+error[E2S25]: non-exhaustive enum `MockOutcome` match; missing constructors `Full`
+```
+
+| outcome | status | |
+|---|---|---|
+| `Collection` / `Item` / `Updated` | 200 | |
+| `Created(id)` | 201 | names the allocation |
+| `Deleted(id)` | 204 | the id stays in the trace, not the body |
+| `Missing(id)` | 404 | |
+| `Full(capacity)` | 409 | **not 507** |
+
+The last two rows are decisions rather than conventions, argued in
+[ADR 7](docs/adr/0007-a-full-resource-is-a-conflict-not-a-storage-failure.md).
+`Full` is a conflict the caller can resolve by deleting a row — 507 is 5xx and
+would page an operator for a server that is working exactly as specified.
+
+**No outcome maps into 5xx**, and the gate enforces that: a domain rule
+declining a request is not the server failing, and the status class says so.
 
 ### The capability manifest — what this binary can reach
 
