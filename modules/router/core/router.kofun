@@ -65,6 +65,58 @@ fn body_limit() -> Int {
     return 4096
 }
 
+# ------------------------------------------------------ capability manifest
+#
+# The type already enforces: a function never handed a filesystem capability
+# cannot touch a filesystem, because it does not compile. That is a stronger
+# mechanism than an ACL file, and it is still not a complete answer.
+#
+# A capability set visible only by reading code is auditable by developers. One
+# that can be printed and diffed is auditable by an operator — and the people
+# who must answer "what can this binary reach?" during an incident are
+# frequently not the people who can read the composition root, and are never
+# reading it for the binary actually running.
+#
+# So the shell prints the set. It is derived from the record rather than
+# maintained beside it, which is why it cannot drift: every row's state is a
+# field of Capabilities, and a row whose field is gone does not compile.
+
+# A capability nobody handed this binary. Zero, so a scope and its absence are
+# the same field rather than a flag beside one.
+fn capability_denied() -> Int {
+    return 0
+}
+
+fn is_granted(scope: Int) -> Int {
+    if scope == capability_denied() {
+        return 0
+    }
+    return 1
+}
+
+# The contract this manifest is written against, so a printed manifest can be
+# read years later by someone holding a different version of this repository.
+fn boot_contract_version() -> Int {
+    return 1
+}
+
+# The build identity: a digest of the Capabilities declaration itself.
+#
+# A git revision would be the obvious choice and is the wrong one here. It
+# changes on every commit, so a byte-compared golden would churn for reasons
+# that have nothing to do with capabilities, and the manifest would stop being
+# diffable across deployments for the property it exists to report. A digest of
+# the declaration changes exactly when the capability surface changes, which is
+# the question an operator diffing two manifests is actually asking.
+#
+# scripts/capability-digest.sh computes it, and tests/boot/check.sh recomputes
+# it from the source and refuses a printed value that disagrees — so editing
+# the record without updating this constant fails by name rather than shipping
+# a manifest that describes the previous binary.
+fn capability_digest() -> Int {
+    return 226362803
+}
+
 fn kind_matched() -> Int {
     return 1
 }
@@ -152,10 +204,29 @@ type Dispatch = {
     capture: Int,
 }
 
-# The one capability a seed handler receives. There is no ambient clock to
+# The capability record a seed handler receives. There is no ambient clock to
 # reach instead — that is the language, and the framework keeps it that way.
+#
+# Every field is a *scope*, not a boolean. A capability system whose grants are
+# booleans is a feature-flag system with better vocabulary: a filesystem
+# capability is not "the filesystem", it names its roots, and a network
+# capability names what it may reach. `capability_denied()` — zero — is how a
+# field says the binary was not handed that authority at all, which is what
+# makes the manifest readable for absence.
+#
+# A credential-carrying capability names its store, never its material. The
+# material does not enter this record, so no projection of the record can leak
+# it — that is a property of the shape rather than of a redaction pass.
 type Capabilities = {
+    monotonic_ms: Int,
     now_seconds: Int,
+    tzdb_year: Int,
+    entropy_seed: Int,
+    log_sink: Int,
+    credential_store: Int,
+    net_listen_port: Int,
+    net_connect_host: Int,
+    fs_root: Int,
 }
 
 # What a handler produces. Pure data out; the shell decides what to do with it.

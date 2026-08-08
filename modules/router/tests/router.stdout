@@ -1,3 +1,33 @@
+kofun-boot capability manifest
+contract
+1
+build
+226362803
+clock.monotonic
+granted
+1700000000000
+clock.system
+granted
+42
+tzdb
+granted
+2026
+entropy
+granted
+20260802
+log
+granted
+2
+db.credential
+granted
+7
+net.listen
+denied
+net.connect
+denied
+fs
+denied
+end manifest
 1
 101
 1

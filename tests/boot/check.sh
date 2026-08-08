@@ -170,6 +170,97 @@ then
     fail 'the emitted C reaches for ambient state'
 fi
 
+# ------------------------------------------------ the capability manifest
+#
+# What the binary can reach, printed by the binary, read here from what it
+# printed. Never from the source: a source-derived manifest proves what the
+# source says, and the question is what this artifact does. That is the same
+# technique the FCIS check uses in reverse — it reads code with comments
+# stripped because prose about not doing something must not satisfy a check
+# about not doing it.
+
+grep -qx 'end manifest' "$WORK/backend.stdout" ||
+    fail 'the binary printed no capability manifest'
+marker=$(grep -n -x 'end manifest' "$WORK/backend.stdout" | head -1 | cut -d: -f1)
+sed -n "1,${marker}p" "$WORK/backend.stdout" >"$WORK/manifest"
+sed -n "$((marker + 1)),\$p" "$WORK/backend.stdout" >"$WORK/body"
+
+# The manifest precedes every other line the program emits. A record printed
+# after the first effect describes a binary that has already done something.
+test "$(sed -n 1p "$WORK/manifest")" = 'kofun-boot capability manifest' ||
+    fail 'the capability manifest is not the first thing the binary prints'
+
+# Named rows, read out of the printed manifest. `grep -A` from the label so a
+# row that moves is still found and a row that vanishes fails by its name.
+row_state() {
+    grep -A1 -Fx -- "$1" "$WORK/manifest" | sed -n 2p
+}
+row_scope() {
+    grep -A2 -Fx -- "$1" "$WORK/manifest" | sed -n 3p
+}
+
+assert_granted() {
+    label=$1
+    test "$(row_state "$label")" = granted ||
+        fail "$label: expected a granted row, got '$(row_state "$label")'"
+    # A granted row for a scopable capability must name its scope. A capability
+    # system whose grants are boolean is a feature-flag system with better
+    # vocabulary, so an unscoped grant is a failure rather than a shorter row.
+    scope=$(row_scope "$label")
+    case $scope in
+        ''|*[!0-9]*)
+            fail "$label: granted without a scope (got '$scope')" ;;
+    esac
+    test "$scope" -ne 0 ||
+        fail "$label: granted with the denied sentinel as its scope"
+}
+
+assert_denied() {
+    label=$1
+    test "$(row_state "$label")" = denied ||
+        fail "$label: expected a denied row, got '$(row_state "$label")'"
+}
+
+for granted in clock.monotonic clock.system tzdb entropy log db.credential; do
+    assert_granted "$granted"
+done
+# The three rows the manifest exists for. A set that listed only grants could
+# not be read for what is absent, and absence is what an operator checks.
+for denied in net.listen net.connect fs; do
+    assert_denied "$denied"
+done
+
+# Tied to the artifact that printed it: the contract the manifest is written
+# against, and a digest of the capability declaration itself.
+test "$(row_state contract)" = "$(sed -n 's/^let BOOT_CONTRACT_VERSION = //p' "$canonical")" ||
+    fail 'the manifest names a contract version the canonical surface does not'
+
+digest=$(sh "$ROOT/scripts/capability-digest.sh" "$core")
+test "$(row_state build)" = "$digest" ||
+    fail "the manifest's build identity is stale: printed $(row_state build), the capability record digests to $digest"
+
+# No secret material. The credential capability names its store; the material
+# is never in the record, so the manifest has nothing to leak — asserted rather
+# than assumed, because "it cannot happen" is what every leak was before it did.
+#
+# The fixture is read from the shell rather than repeated here, and the check
+# is then proved non-vacuous in two steps: the value must exist, and it must be
+# present in the built artifact. A grep for a value that is not in the binary
+# passes for the wrong reason and would keep passing after the leak.
+material=$(sed 's/[[:space:]]*#.*$//' "$shell" |
+    sed -n '/^fn credential_material() -> Int {$/,/^}$/p' |
+    sed -n 's/^[[:space:]]*return \([0-9][0-9]*\)$/\1/p')
+test -n "$material" ||
+    fail 'the shell no longer carries a credential fixture; the secret check would pass vacuously'
+grep -q -- "$material" "$WORK/router.c" ||
+    fail "the credential fixture $material is not in the built artifact; the secret check would pass vacuously"
+if grep -qx -- "$material" "$WORK/manifest"; then
+    fail 'the credential material appears in the capability manifest'
+fi
+
+printf 'boot: the effective capability set is printed, scoped, and read from the binary: PASS\n'
+printf 'boot: denied capabilities are printed as denied: PASS\n'
+
 # ------------------------------------------- recorded dispatch decisions
 #
 # Twenty table lines — four per slot, because the capture flag is compiled
@@ -184,8 +275,10 @@ fi
 # run is what lets a broken rule fail by the name of the rule, which is the
 # same reason the effects section reads its own backend output.
 
+# Offsets are into the body — everything after the manifest — so the startup
+# record can grow a section without renumbering every dispatch assertion below.
 field() {
-    sed -n "$1,$2p" "$WORK/backend.stdout" | tr '\n' ' '
+    sed -n "$1,$2p" "$WORK/body" | tr '\n' ' '
 }
 
 assert_field() {
@@ -240,9 +333,9 @@ assert_field 'a capturing route joins the Allow set and refuses without capturin
 assert_field 'a handler is pure and its clock is the injected field' \
     81 85 '200 101042 200 106 101043 '
 
-lines=$(wc -l <"$WORK/backend.stdout" | tr -d ' ')
+lines=$(wc -l <"$WORK/body" | tr -d ' ')
 test "$lines" -eq 85 ||
-    fail "recorded decisions cover the whole run: expected 85 lines, got $lines"
+    fail "recorded decisions cover the whole body: expected 85 lines, got $lines"
 
 # Every named decision passed, so a difference here is a line no assertion
 # owns. Checked last, and against the run rather than the other way round.
@@ -251,14 +344,14 @@ cmp "$expected" "$WORK/backend.stdout" ||
 
 # The table refuses duplicates by construction today: prove the five pairs
 # are distinct rather than trusting the comment that says so.
-dupes=$(sed -n '1,20p' "$expected" | paste - - - - | awk '{print $1, $2}' | sort | uniq -d)
+dupes=$(sed -n '1,20p' "$WORK/body" | paste - - - - | awk '{print $1, $2}' | sort | uniq -d)
 test -z "$dupes" || fail "duplicate (method, path) pair in the table: $dupes"
 
 # A capturing slot whose base collides with a literal slot's code would make
 # one of them unreachable, and the matcher would answer by slot order rather
 # than by the table. Nothing forbids it yet, so the gate does.
-captures=$(sed -n '1,20p' "$expected" | paste - - - - | awk '$4 == 1 { print $2 }')
-literals=$(sed -n '1,20p' "$expected" | paste - - - - | awk '$4 == 0 { print $2 }')
+captures=$(sed -n '1,20p' "$WORK/body" | paste - - - - | awk '$4 == 1 { print $2 }')
+literals=$(sed -n '1,20p' "$WORK/body" | paste - - - - | awk '$4 == 0 { print $2 }')
 for base in $captures; do
     for code in $literals; do
         test "$base" != "$code" ||
@@ -290,6 +383,57 @@ if test "${ROUTER_SKIP_BREAK_TEST:-0}" != 1; then
         "$WORK/router.break-capture.log"
 
     printf 'boot: the capture break test fails by name: PASS\n'
+
+    # A row dropped from the emission. This is the failure the manifest is
+    # least able to notice on its own: the remaining rows are all correct, the
+    # bytes are still stable, and the only evidence is a row that is no longer
+    # there. The gate reads rows by name, so absence is what it reports.
+    cp -R "$router_module" "$router_breaks/manifest-row"
+    sed -i '/^    print("net.listen")$/,+1d' \
+        "$router_breaks/manifest-row/shell/router.kofun"
+    if ROUTER_MODULE="$router_breaks/manifest-row" \
+        ROUTER_SKIP_BREAK_TEST=1 EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        >"$WORK/router.break-manifest-row.log" 2>&1
+    then
+        fail 'dropping a row from the capability manifest did not break the gate'
+    fi
+    require_line 'the dropped manifest row was not named' \
+        'net.listen: expected a denied row' \
+        "$WORK/router.break-manifest-row.log"
+
+    # A grant without a scope. "granted" alone is a feature flag with better
+    # vocabulary: it cannot answer which roots, which hosts, which port.
+    cp -R "$router_module" "$router_breaks/manifest-scope"
+    sed -i '/^    print("granted")$/{n;/^    print(scope)$/d;}' \
+        "$router_breaks/manifest-scope/shell/router.kofun"
+    if ROUTER_MODULE="$router_breaks/manifest-scope" \
+        ROUTER_SKIP_BREAK_TEST=1 EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        >"$WORK/router.break-manifest-scope.log" 2>&1
+    then
+        fail 'a granted capability printed without its scope did not break the gate'
+    fi
+    require_line 'the unscoped grant was not rejected by name' \
+        'granted without a scope' \
+        "$WORK/router.break-manifest-scope.log"
+
+    # A build identity that no longer describes the record it was computed
+    # from. A manifest whose build line is stale describes the previous
+    # binary, which is worse than printing none: it is a wrong answer to the
+    # question the manifest exists to answer.
+    cp -R "$router_module" "$router_breaks/manifest-digest"
+    sed -i 's/^    return 226362803$/    return 1/' \
+        "$router_breaks/manifest-digest/core/router.kofun"
+    if ROUTER_MODULE="$router_breaks/manifest-digest" \
+        ROUTER_SKIP_BREAK_TEST=1 EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        >"$WORK/router.break-manifest-digest.log" 2>&1
+    then
+        fail 'a stale capability digest did not break the gate'
+    fi
+    require_line 'the stale build identity was not named' \
+        "the manifest's build identity is stale" \
+        "$WORK/router.break-manifest-digest.log"
+
+    printf 'boot: dropped row, unscoped grant, and stale build identity fail by name: PASS\n'
 fi
 
 # ------------------------------------------------------- the effect boundary
@@ -730,12 +874,12 @@ $(diff "$recorded" "$WORK/openapi.yaml" | head -12)"
 # every row appears as a method under it. Counting rather than eyeballing: a
 # projection that silently dropped a route would still cmp clean against a
 # golden regenerated from the same bug.
-table_paths=$(sed -n '1,20p' "$expected" | paste - - - - | awk '{print $2}' | sort -u | wc -l)
+table_paths=$(sed -n '1,20p' "$WORK/body" | paste - - - - | awk '{print $2}' | sort -u | wc -l)
 document_paths=$(grep -cE '^  /' "$recorded")
 test "$table_paths" -eq "$document_paths" ||
     fail "the table has $table_paths paths and the document has $document_paths"
 
-table_rows=$(sed -n '1,20p' "$expected" | paste - - - - | wc -l)
+table_rows=$(sed -n '1,20p' "$WORK/body" | paste - - - - | wc -l)
 document_ops=$(grep -cE '^      operationId:' "$recorded")
 test "$table_rows" -eq "$document_ops" ||
     fail "the table has $table_rows routes and the document has $document_ops operations"
@@ -788,7 +932,7 @@ $(diff "$recorded_client" "$WORK/client.ts" | head -12)"
 # would let a capturing route vanish from the client while the totals still
 # looked right.
 client_paths=$(grep -cE '^  \| ("/|`/)' "$recorded_client")
-table_rows=$(sed -n '1,20p' "$expected" | paste - - - - | wc -l)
+table_rows=$(sed -n '1,20p' "$WORK/body" | paste - - - - | wc -l)
 test "$client_paths" -eq "$table_rows" ||
     fail "the table has $table_rows routes and the client exposes $client_paths"
 

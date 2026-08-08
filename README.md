@@ -153,11 +153,66 @@ trace: FAIL: the session diverged at step 5
 Caught where it happened, not as a mysterious id collision two steps later.
 Editing the trace by hand is refused separately, by its digest.
 
+### The capability manifest — what this binary can reach
+
+The type already enforces: a function never handed a filesystem capability
+cannot touch a filesystem, because it does not compile. That is stronger than
+an ACL file, and it is still not a complete answer.
+
+A capability set visible only by reading code is auditable by developers. One
+that can be **printed and diffed** is auditable by an operator — and the person
+answering "what can this reach?" during an incident is often not the person who
+can read the composition root, and is never reading it for the binary actually
+running. So the shell prints the effective set before anything else happens,
+unconditionally:
+
+```
+kofun-boot capability manifest
+contract
+1
+build
+226362803
+clock.monotonic
+granted
+1700000000000
+...
+net.listen
+denied
+net.connect
+denied
+fs
+denied
+end manifest
+```
+
+Three things make it worth printing rather than describing:
+
+**Denied rows are printed.** A manifest listing only grants cannot be read for
+what is *absent*, and absence is the property being checked.
+
+**Grants carry scopes, not booleans.** A filesystem capability is not "the
+filesystem" — it names its roots; a network capability names what it may reach.
+Every field of `Capabilities` is a scope, and zero is how a field says the
+binary was never handed that authority. A granted row without a scope fails the
+gate.
+
+**`build` is a digest of the capability declaration, not a revision.** A git
+revision changes on every commit, so two manifests would differ whenever
+anything had been committed between them. This changes exactly when the
+capability surface changes, which is the question a deploy diff is asking.
+
+The gate runs the binary and asserts named rows out of what it printed — never
+by reading the source, because a source-derived manifest proves what the source
+says and the question is what the artifact does. Dropping a row, granting
+without a scope, and letting the build identity go stale each fail by name.
+
 ### The projections — one declaration, many artifacts
 
-`scripts/openapi.sh` and `scripts/client-ts.sh` both read **the twelve lines the
-router itself printed**, which the gate pins as the compiled table. Artifacts
-made from those bytes cannot describe a route the dispatcher does not serve.
+`scripts/openapi.sh` and `scripts/client-ts.sh` both read **the twenty lines the
+router itself printed** after its capability manifest, which the gate pins as
+the compiled table — four per slot, the fourth being whether the route
+captures. Artifacts made from those bytes cannot describe a route the
+dispatcher does not serve.
 
 The typed client turns that into a compile error at the call site:
 
@@ -205,7 +260,7 @@ number quoted; hand-editing the OpenAPI document fails with the diff.
 | pillar | inherited from | the measurable bar |
 |---|---|---|
 | Contract-first APIs | servant, FastAPI, Elysia | routes, validation, OpenAPI, and the typed client derive from **one** declaration; drift is a build failure — **holds for the document and the TypeScript client today** |
-| Capabilities, not containers | Spring DI, inverted | no container and no reflection; the core **may not construct** a capability, enforced by a gate that prints the offending line |
+| Capabilities, not containers | Spring DI, inverted | no container and no reflection; the core **may not construct** a capability, enforced by a gate that prints the offending line — and the effective set, with scopes and denials, is **printed by the binary at startup and read back by the gate today** |
 | Functional core, imperative shell | FCIS, functional DDD | enforced by construction — **holds today** |
 | Deterministic replay | Kofun's gate culture | identical bytes on both backends, twice, under a hostile `TZ`, locale, and `env -i`, **and a recorded session replays step-for-step — holds today** |
 | Speed | Elysia, Gin, Hono | requests/sec published with its method — *unmeasured; no number appears here before the gate that measured it* |

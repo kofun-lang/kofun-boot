@@ -32,8 +32,35 @@ the `Unmeasured at this release` section added as a local requirement.
   `client.get("/things/{id}")` does not, so the one call nobody can perform is
   not the only one that type-checks.
 
+- **The effective capability manifest, printed by the binary**
+  ([#33](https://github.com/hjosugi/kofun-boot/issues/33)) — the shell prints
+  what was granted, with what scope, before the first effect and not behind a
+  flag. Denied capabilities are printed as denied, because a set listing only
+  grants cannot be read for absence. `net.listen`, `net.connect` and `fs` are
+  the three rows the seed exists to show as denied.
+- **Capability scopes instead of booleans** — every field of the seed's
+  `Capabilities` record is a scope, and `capability_denied()` — zero — is how a
+  field says the binary was never handed that authority. A capability system
+  whose grants are boolean is a feature-flag system with better vocabulary, so
+  a granted row without a scope fails the gate.
+- **A credential capability that cannot leak its material** — the record
+  carries which store answered, never what it answered with. The material is a
+  local in the composition root, so no projection of the record can print it.
+  The gate proves the check is not vacuous: the fixture must be present in the
+  built artifact and absent from the manifest.
+- **`scripts/capability-digest.sh`** — the manifest's `build` identity is a
+  digest of the `Capabilities` declaration, read with comments stripped. A git
+  revision would change on every commit, churning a byte-compared golden and
+  making two manifests differ whenever anything had been committed between
+  them; this changes exactly when the capability surface changes.
+
 ### Changed
 
+- **The projections find the route table after the `end manifest` marker**
+  rather than at a fixed line offset. The startup record is meant to grow — R2's
+  resolved-config report is to become a second section of it — and a projection
+  keyed to a line number would have read configuration as routes the first time
+  it did.
 - **The boot gate's named router assertions read the binary's output rather
   than the golden file.** Asserting against the golden only proved the golden
   said what it said — a changed rule was caught by `cmp` as "output differs"
@@ -42,7 +69,15 @@ the `Unmeasured at this release` section added as a local requirement.
 
 ### Gates
 
-- 40/40 module-owned tests pass across three suites.
+- 42/42 module-owned tests pass across three suites.
+- The gate runs the binary and asserts named rows out of the printed manifest,
+  never by reading the source: a source-derived manifest proves what the source
+  says, and the question is what the artifact does.
+- Three manifest break tests fail by name — a dropped row, a grant printed
+  without its scope, and a build identity left stale after the record changed.
+- Removing a field from the capability record was verified both ways before
+  publication: removing it alone is a compile error naming the field, and
+  removing it cleanly is caught as `fs: expected a denied row, got ''`.
 - The capture rule has a break test: echoing the path instead of the segment
   is rejected by name. It is the failure worth testing for, because it still
   reports a capture, still varies with the request, and still replays

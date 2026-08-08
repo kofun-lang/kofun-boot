@@ -5,6 +5,88 @@
 # gets printed. Concatenated after ../core/router.kofun by
 # scripts/build-seed.sh.
 
+# ------------------------------------------------------ capability manifest
+#
+# The row labels are literals here rather than values in the record, because
+# the slice has no Text in records and no Text across a function boundary. What
+# keeps them honest is that every row's *state* is read from a field: a row
+# whose field is gone does not compile, and a row dropped from this emission is
+# named by the gate, which reads the printed manifest rather than this source.
+#
+# Ordering is the declaration order of the record and never a map iteration, so
+# two manifests are diffable line by line.
+
+# A credential's material, as it would arrive at the composition root.
+#
+# It is here so the gate's check for it is not vacuous: the value is genuinely
+# in the binary, and must be genuinely absent from the manifest. The record
+# never carries it — only which store it came from — so the manifest has
+# nothing to print even by mistake. That is a property of the record's shape
+# rather than of a redaction pass over the output, which is what makes it hold
+# for rows nobody thought about.
+fn credential_material() -> Int {
+    return 990099
+}
+
+# What the record carries: which store answered, not what it answered with.
+fn credential_store_of(material: Int) -> Int {
+    if material == credential_material() {
+        return 7
+    }
+    return capability_denied()
+}
+
+fn emit_capability(scope: Int) -> Int {
+    if is_granted(scope) == 0 {
+        # Denied rows are printed. A manifest listing only grants cannot be
+        # read for what is absent, and absence is the property an operator is
+        # checking.
+        print("denied")
+        return 0
+    }
+    print("granted")
+    print(scope)
+    return 0
+}
+
+fn emit_manifest(capabilities: Capabilities) -> Int {
+    print("kofun-boot capability manifest")
+    print("contract")
+    print(boot_contract_version())
+    print("build")
+    print(capability_digest())
+
+    print("clock.monotonic")
+    emit_capability(capabilities.monotonic_ms)
+    print("clock.system")
+    emit_capability(capabilities.now_seconds)
+    print("tzdb")
+    emit_capability(capabilities.tzdb_year)
+    print("entropy")
+    emit_capability(capabilities.entropy_seed)
+    print("log")
+    emit_capability(capabilities.log_sink)
+    # The store, never the material. The credential itself is not in the
+    # record, so this row cannot print it even by mistake.
+    print("db.credential")
+    emit_capability(capabilities.credential_store)
+    # This seed binds nothing, connects nowhere, and opens no file. Those three
+    # rows are the reason the manifest is worth printing at all.
+    print("net.listen")
+    emit_capability(capabilities.net_listen_port)
+    print("net.connect")
+    emit_capability(capabilities.net_connect_host)
+    print("fs")
+    emit_capability(capabilities.fs_root)
+
+    # The projections read the table that follows this marker rather than a
+    # fixed line offset, so the startup record can grow — R2's resolved-config
+    # report is meant to become a second section here — without silently
+    # moving the bytes every other reader depends on.
+    print("end manifest")
+    return 0
+}
+
 fn emit_dispatch(table: RouteTable, request: Request) -> Int {
     let outcome: Dispatch = dispatch_of(table, request)
     print(request.method)
@@ -16,6 +98,30 @@ fn emit_dispatch(table: RouteTable, request: Request) -> Int {
 }
 
 fn main() -> Int {
+    # --- the effective capability set, before anything else happens.
+    #
+    # Unconditionally, and not behind a flag: a diagnostic that has to be
+    # enabled is a diagnostic nobody has during the incident. This is the
+    # composition root, so what is granted is decided in one place a reader can
+    # hold, and the manifest is a projection of that decision rather than a
+    # second declaration of it.
+    #
+    # The credential's material never enters the record — only which store it
+    # came from — so `db.credential` reports its presence and scope and has
+    # nothing else it could print.
+    let capabilities: Capabilities = Capabilities(
+        monotonic_ms: 1700000000000,
+        now_seconds: 42,
+        tzdb_year: 2026,
+        entropy_seed: 20260802,
+        log_sink: 2,
+        credential_store: credential_store_of(credential_material()),
+        net_listen_port: capability_denied(),
+        net_connect_host: capability_denied(),
+        fs_root: capability_denied()
+    )
+    emit_manifest(capabilities)
+
     let table: RouteTable = boot_table()
 
     # --- the table itself, so the golden pins the compiled form. Four fields
@@ -107,15 +213,26 @@ fn main() -> Int {
     emit_dispatch(table, captured_wrong_method)
 
     # --- handlers are pure: the same request and the same capability record
-    #     produce the same response, and time is the injected field
-    let clock: Capabilities = Capabilities(now_seconds: 42)
-    let hello_response: Response = handle_hello(hello, clock)
+    #     produce the same response, and time is the injected field. The
+    #     handlers receive the same record the manifest described, so what was
+    #     printed at startup is what they were actually handed.
+    let hello_response: Response = handle_hello(hello, capabilities)
     print(hello_response.status)
     print(hello_response.body_code)
-    let sum_response: Response = handle_sum(sum, clock)
+    let sum_response: Response = handle_sum(sum, capabilities)
     print(sum_response.status)
     print(sum_response.body_code)
-    let later: Capabilities = Capabilities(now_seconds: 43)
+    let later: Capabilities = Capabilities(
+        monotonic_ms: 1700000001000,
+        now_seconds: 43,
+        tzdb_year: 2026,
+        entropy_seed: 20260802,
+        log_sink: 2,
+        credential_store: 7,
+        net_listen_port: capability_denied(),
+        net_connect_host: capability_denied(),
+        fs_root: capability_denied()
+    )
     let hello_later: Response = handle_hello(hello, later)
     print(hello_later.body_code)
 

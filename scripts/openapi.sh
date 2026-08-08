@@ -3,11 +3,16 @@ set -eu
 
 # Project the compiled route table into an OpenAPI document.
 #
-# The input is not a second declaration of the routes: it is the first twenty
-# lines the router itself prints, which the gate pins as the compiled table —
-# four per slot, the fourth being whether the route captures. A document
-# generated from those bytes cannot describe a route the dispatcher does not
-# serve, and cannot miss one it does.
+# The input is not a second declaration of the routes: it is the twenty lines
+# the router itself prints after its capability manifest, which the gate pins
+# as the compiled table — four per slot, the fourth being whether the route
+# captures. A document generated from those bytes cannot describe a route the
+# dispatcher does not serve, and cannot miss one it does.
+#
+# The table is found after the `end manifest` marker rather than at a fixed
+# offset. The startup record is meant to grow — the resolved-config report is
+# to become a second section of it — and a projection keyed to a line number
+# would read configuration as routes the first time it did.
 #
 # usage: scripts/openapi.sh [BUILT_ROUTER]
 
@@ -24,9 +29,12 @@ if test -z "$router"; then
 fi
 test -x "$router" || fail "no built router at $router"
 
-table=$("$router" | sed -n '1,20p')
+output=$("$router")
+printf '%s\n' "$output" | grep -qx 'end manifest' ||
+    fail 'the router printed no capability manifest to read the table after'
+table=$(printf '%s\n' "$output" | sed -n '/^end manifest$/,$p' | sed -n '2,21p')
 test "$(printf '%s\n' "$table" | wc -l)" -eq 20 ||
-    fail 'the router did not print a twenty-line table'
+    fail 'the router did not print a twenty-line table after its manifest'
 
 # The one seam the slice forces: the table carries path codes because a record
 # cannot hold Text. Names live here, and every code must have one — a route

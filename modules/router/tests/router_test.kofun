@@ -275,6 +275,56 @@ fn test_every_request_produces_one_of_four_kinds() -> Int {
     return failures
 }
 
+# ------------------------------------------------------- capability record
+#
+# Building the record is the composition root's job, and these tests are not
+# the composition root — but they must hand a handler the same shape the shell
+# does. The helper keeps that in one place: a field added to Capabilities is a
+# compile error here once, not in every test that constructs one.
+#
+# The grants match the shell's: a clock, a tzdb, entropy, a log sink and a
+# credential store, with the network and the filesystem denied.
+fn capabilities_at(seconds: Int) -> Capabilities {
+    let capabilities: Capabilities = Capabilities(
+        monotonic_ms: 1700000000000,
+        now_seconds: seconds,
+        tzdb_year: 2026,
+        entropy_seed: 20260802,
+        log_sink: 2,
+        credential_store: 7,
+        net_listen_port: capability_denied(),
+        net_connect_host: capability_denied(),
+        fs_root: capability_denied()
+    )
+    return capabilities
+}
+
+# Denied is the sentinel, not a separate flag. A scope of zero and "not
+# granted" are the same fact, which is what lets one field carry both.
+fn test_denied_is_a_scope_of_zero() -> Int {
+    let capabilities: Capabilities = capabilities_at(42)
+    let mut failures = 0
+    failures = failures + expect_eq_int(is_granted(capabilities.fs_root), 0)
+    failures = failures
+        + expect_eq_int(is_granted(capabilities.net_listen_port), 0)
+    failures = failures
+        + expect_eq_int(is_granted(capabilities.now_seconds), 1)
+    failures = failures + expect_eq_int(capability_denied(), 0)
+    return failures
+}
+
+# A capability the binary was handed reports the scope it was handed, not a
+# boolean. Granting something unscoped is the failure this rules out.
+fn test_a_granted_capability_carries_its_scope() -> Int {
+    let capabilities: Capabilities = capabilities_at(42)
+    let mut failures = 0
+    failures = failures + expect_eq_int(capabilities.tzdb_year, 2026)
+    failures = failures + expect_eq_int(capabilities.log_sink, 2)
+    failures = failures + expect_ne_int(capabilities.tzdb_year, 1)
+    failures = failures + expect_ne_int(capabilities.log_sink, 1)
+    return failures
+}
+
 # ---------------------------------------------------------- purity of the
 #                                                             handlers
 #
@@ -284,9 +334,9 @@ fn test_every_request_produces_one_of_four_kinds() -> Int {
 
 fn test_a_handler_is_a_function_of_its_capability() -> Int {
     let request: Request = request_at(method_get(), path_hello(), 0)
-    let clock: Capabilities = Capabilities(now_seconds: 42)
-    let same: Capabilities = Capabilities(now_seconds: 42)
-    let later: Capabilities = Capabilities(now_seconds: 43)
+    let clock: Capabilities = capabilities_at(42)
+    let same: Capabilities = capabilities_at(42)
+    let later: Capabilities = capabilities_at(43)
     let first: Response = handle_hello(request, clock)
     let repeated: Response = handle_hello(request, same)
     let moved: Response = handle_hello(request, later)
@@ -301,7 +351,7 @@ fn test_a_handler_is_a_function_of_its_capability() -> Int {
 fn test_handlers_do_not_share_state() -> Int {
     let hello: Request = request_at(method_get(), path_hello(), 0)
     let sum: Request = request_at(method_post(), path_sum(), 64)
-    let clock: Capabilities = Capabilities(now_seconds: 42)
+    let clock: Capabilities = capabilities_at(42)
     let mut failures = 0
     let a: Response = handle_hello(hello, clock)
     let b: Response = handle_sum(sum, clock)

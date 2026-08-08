@@ -3,10 +3,10 @@ set -eu
 
 # Project the compiled route table into a TypeScript client.
 #
-# Same input as the OpenAPI projection and for the same reason: the twelve
-# lines the router itself printed, which the gate pins as the compiled table.
-# A client generated from those bytes cannot call a route the dispatcher does
-# not serve.
+# Same input as the OpenAPI projection and for the same reason: the twenty
+# lines the router itself printed after its capability manifest, which the gate
+# pins as the compiled table. A client generated from those bytes cannot call a
+# route the dispatcher does not serve.
 #
 # What swagger-codegen cannot offer, and this can: the document it consumes
 # was written *beside* the server, so a generated client is only as true as
@@ -33,9 +33,12 @@ if test -z "$router"; then
 fi
 test -x "$router" || fail "no built router at $router"
 
-table=$("$router" | sed -n '1,20p')
+output=$("$router")
+printf '%s\n' "$output" | grep -qx 'end manifest' ||
+    fail 'the router printed no capability manifest to read the table after'
+table=$(printf '%s\n' "$output" | sed -n '/^end manifest$/,$p' | sed -n '2,21p')
 test "$(printf '%s\n' "$table" | wc -l)" -eq 20 ||
-    fail 'the router did not print a twenty-line table'
+    fail 'the router did not print a twenty-line table after its manifest'
 
 # The seam the slice forces, shared with the OpenAPI projection: the table
 # carries path codes because a record cannot hold Text. Resolved up front, in
