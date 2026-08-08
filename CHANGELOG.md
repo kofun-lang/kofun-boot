@@ -11,7 +11,44 @@ the `Unmeasured at this release` section added as a local requirement.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Path captures in the Stage 2 seed** ([#13](https://github.com/hjosugi/kofun-boot/issues/13)) —
+  a route slot carries a capture flag, and a dispatch reports the segment the
+  route captured. `GET /things/{id}` is the first capturing slot: it matches
+  the family of paths sharing its base and reports `7` out of `104007`, so the
+  capture is demonstrably not the path. The canonical surface has routed on
+  segments and captured `:name` since the beginning; the seed routed on codes
+  and captured nothing, and this closes that half of the gap.
+- **A `Dispatch` record beside `RouteResult`** — a matched route now has two
+  things to report and the slice allows one payload per constructor, so the
+  capture travels in a record beside the sum, the way `EffectStep` does. The
+  capture is printed for every outcome, including `0` for routes that capture
+  nothing: a field that appears only when interesting cannot be read for
+  absence.
+- **A capturing route in both projections** — the OpenAPI document declares
+  `/things/{id}`'s path parameter, and the TypeScript client emits it as a
+  template literal type. `` client.get(`/things/${id}`) `` compiles;
+  `client.get("/things/{id}")` does not, so the one call nobody can perform is
+  not the only one that type-checks.
+
+### Changed
+
+- **The boot gate's named router assertions read the binary's output rather
+  than the golden file.** Asserting against the golden only proved the golden
+  said what it said — a changed rule was caught by `cmp` as "output differs"
+  and named nothing. The golden comparison now runs last, after every named
+  decision, which is what lets a broken rule fail by the name of the rule.
+
+### Gates
+
+- 40/40 module-owned tests pass across three suites.
+- The capture rule has a break test: echoing the path instead of the segment
+  is rejected by name. It is the failure worth testing for, because it still
+  reports a capture, still varies with the request, and still replays
+  identically.
+- A capturing base that collides with a literal route code fails the gate;
+  nothing else forbids it yet.
 
 ## [0.4.1] - 2026-08-07
 

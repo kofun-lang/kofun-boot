@@ -41,7 +41,8 @@ test -x "$KOFUN" || test -f "$KOFUN" ||
 
 # ---------------------------------------------------- canonical surface
 
-canonical="$ROOT/modules/router/contract/router.kofun"
+router_module=${ROUTER_MODULE:-"$ROOT/modules/router"}
+canonical="$router_module/contract/router.kofun"
 test -f "$canonical" || fail 'canonical surface is missing'
 
 for declaration in \
@@ -71,6 +72,11 @@ require_line 'canonical PayloadTooLarge no longer carries the limit' \
     '| PayloadTooLarge(limit: Int, observed: Int)' "$canonical"
 require_line 'canonical Capabilities lost the injected clock' \
     '    clock: MonotonicClock,' "$canonical"
+# A match that does not say what it captured cannot serve `/things/:id`, and
+# the seed's capture projection would then be answering a question the
+# contract no longer asks.
+require_line 'canonical Matched no longer carries the captured segments' \
+    '| Matched(handler: HandlerId, captures: List[Text])' "$canonical"
 
 # Still ahead of the compiler, on purpose. The executable evidence is the
 # seed, not this file.
@@ -84,9 +90,9 @@ require_line 'canonical surface did not stop at the documented boundary' \
 
 # ------------------------------------------------------------------ seed
 
-core="$ROOT/modules/router/core/router.kofun"
-shell="$ROOT/modules/router/shell/router.kofun"
-expected="$ROOT/modules/router/tests/router.stdout"
+core="$router_module/core/router.kofun"
+shell="$router_module/shell/router.kofun"
+expected="$router_module/tests/router.stdout"
 test -f "$core" || fail 'core source is missing'
 test -f "$shell" || fail 'shell source is missing'
 test -f "$expected" || fail 'seed golden is missing'
@@ -138,12 +144,10 @@ fi
     fail "seed did not build: $(cat "$WORK/build.stderr")"
 
 "$WORK/router" >"$WORK/backend.stdout"
-cmp "$expected" "$WORK/backend.stdout" ||
-    fail 'C11 backend output differs from the recorded dispatch decisions'
 
 "$KOFUN" run "$seed" >"$WORK/reference.stdout" 2>"$WORK/run.stderr" ||
     fail "seed did not run on the reference executor: $(cat "$WORK/run.stderr")"
-cmp "$expected" "$WORK/reference.stdout" ||
+cmp "$WORK/backend.stdout" "$WORK/reference.stdout" ||
     fail 'reference executor and C11 backend disagree'
 
 "$WORK/router" >"$WORK/backend.second"
@@ -168,13 +172,20 @@ fi
 
 # ------------------------------------------- recorded dispatch decisions
 #
-# Twelve table lines, then four lines per dispatch (method, path, kind,
-# payload), then five handler lines. Kind 1 Matched, 2 NotFound,
-# 3 MethodNotAllowed, 4 PayloadTooLarge. Each assertion names the rule it
-# reads, so a failure says which decision moved.
+# Twenty table lines — four per slot, because the capture flag is compiled
+# state — then five lines per dispatch (method, path, kind, payload, capture),
+# then five handler lines. Kind 1 Matched, 2 NotFound, 3 MethodNotAllowed,
+# 4 PayloadTooLarge. Each assertion names the rule it reads, so a failure says
+# which decision moved.
+#
+# These read the binary's output, not the golden file. Asserting against the
+# golden only proves the golden says what it says: a changed rule would be
+# caught by the `cmp` below as "output differs" and name nothing. Reading the
+# run is what lets a broken rule fail by the name of the rule, which is the
+# same reason the effects section reads its own backend output.
 
 field() {
-    sed -n "$1,$2p" "$expected" | tr '\n' ' '
+    sed -n "$1,$2p" "$WORK/backend.stdout" | tr '\n' ' '
 }
 
 assert_field() {
@@ -187,37 +198,99 @@ assert_field() {
         fail "$label: expected '$want', got '$got'"
 }
 
-assert_field 'the compiled table is the four declared routes' \
-    1 12 '1 101 1 2 102 2 1 103 3 2 103 4 '
+assert_field 'the compiled table is the five declared routes' \
+    1 20 '1 101 1 0 2 102 2 0 1 103 3 0 2 103 4 0 1 104 5 1 '
+assert_field 'exactly one slot is compiled as capturing' \
+    17 20 '1 104 5 1 '
 assert_field 'a matched route names its handler' \
-    13 16 '1 101 1 1 '
+    21 25 '1 101 1 1 0 '
 assert_field 'a second route matches independently' \
-    17 20 '2 102 1 2 '
+    26 30 '2 102 1 2 0 '
 assert_field 'a wrong method names the method that would have worked' \
-    21 24 '1 102 3 2 '
+    31 35 '1 102 3 2 0 '
 assert_field 'a path with two methods matches the right one' \
-    25 28 '2 103 1 4 '
+    36 40 '2 103 1 4 0 '
 assert_field 'an unknown path is NotFound carrying the path' \
-    29 32 '1 999 2 999 '
+    41 45 '1 999 2 999 0 '
 assert_field 'an oversized body is refused before the table is consulted' \
-    33 36 '1 101 4 4096 '
+    46 50 '1 101 4 4096 0 '
 assert_field 'an oversized body to an unknown path reports the same thing' \
-    37 40 '1 999 4 4096 '
+    51 55 '1 999 4 4096 0 '
 assert_field 'the limit itself is inside the limit' \
-    41 44 '1 101 1 1 '
+    56 60 '1 101 1 1 0 '
 assert_field 'the Allow set does not depend on the request method' \
-    45 48 '9 103 3 3 '
+    61 65 '9 103 3 3 0 '
+
+# The capture rules. The first is the whole claim of this section: a capturing
+# route reports the segment, and the segment is not the path — 7 out of
+# 104007. An implementation that echoed the path would satisfy "a capture was
+# reported" and fail here.
+assert_field 'a capturing route reports the segment it captured, not the path' \
+    66 70 '1 104007 1 5 7 '
+# The flag decides, not the shape of the code. A request built exactly the way
+# a captured path is built, aimed at a literal slot, matches nothing and
+# captures nothing.
+assert_field 'a captured-looking path does not match a literal route' \
+    71 75 '1 103007 2 103007 0 '
+# A capturing slot is a slot: it joins the Allow set like any other, and a
+# refusal carries no capture because no route was taken.
+assert_field 'a capturing route joins the Allow set and refuses without capturing' \
+    76 80 '2 104007 3 1 0 '
+
 assert_field 'a handler is pure and its clock is the injected field' \
-    49 53 '200 101042 200 106 101043 '
+    81 85 '200 101042 200 106 101043 '
 
-lines=$(wc -l <"$expected" | tr -d ' ')
-test "$lines" -eq 53 ||
-    fail "recorded decisions cover the whole golden: expected 53 lines, got $lines"
+lines=$(wc -l <"$WORK/backend.stdout" | tr -d ' ')
+test "$lines" -eq 85 ||
+    fail "recorded decisions cover the whole run: expected 85 lines, got $lines"
 
-# The table refuses duplicates by construction today: prove the four pairs
+# Every named decision passed, so a difference here is a line no assertion
+# owns. Checked last, and against the run rather than the other way round.
+cmp "$expected" "$WORK/backend.stdout" ||
+    fail 'named decisions passed but the recorded dispatch golden still differs'
+
+# The table refuses duplicates by construction today: prove the five pairs
 # are distinct rather than trusting the comment that says so.
-dupes=$(sed -n '1,12p' "$expected" | paste - - - | awk '{print $1, $2}' | sort | uniq -d)
+dupes=$(sed -n '1,20p' "$expected" | paste - - - - | awk '{print $1, $2}' | sort | uniq -d)
 test -z "$dupes" || fail "duplicate (method, path) pair in the table: $dupes"
+
+# A capturing slot whose base collides with a literal slot's code would make
+# one of them unreachable, and the matcher would answer by slot order rather
+# than by the table. Nothing forbids it yet, so the gate does.
+captures=$(sed -n '1,20p' "$expected" | paste - - - - | awk '$4 == 1 { print $2 }')
+literals=$(sed -n '1,20p' "$expected" | paste - - - - | awk '$4 == 0 { print $2 }')
+for base in $captures; do
+    for code in $literals; do
+        test "$base" != "$code" ||
+            fail "capturing base $base collides with a literal route code"
+    done
+done
+
+# Do not merely assert the capture rule — break it in an isolated module copy
+# and require this same gate to reject it by name. Echoing the path is the
+# failure worth testing for: it still reports "a capture", still varies with
+# the request, and still replays identically, so every property around it
+# holds while the one that matters is wrong. The recursive run skips this
+# block, so a mutation can never pass by recursing.
+if test "${ROUTER_SKIP_BREAK_TEST:-0}" != 1; then
+    router_breaks="$WORK/router-breaks"
+    mkdir -p "$router_breaks"
+
+    cp -R "$router_module" "$router_breaks/capture"
+    sed -i 's|return request_path % capture_base()|return request_path|' \
+        "$router_breaks/capture/core/router.kofun"
+    if ROUTER_MODULE="$router_breaks/capture" \
+        ROUTER_SKIP_BREAK_TEST=1 EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        >"$WORK/router.break-capture.log" 2>&1
+    then
+        fail 'making the capture echo the path did not break the gate'
+    fi
+    require_line 'the capture break was not rejected by name' \
+        'a capturing route reports the segment it captured, not the path' \
+        "$WORK/router.break-capture.log"
+
+    printf 'boot: the capture break test fails by name: PASS\n'
+fi
 
 # ------------------------------------------------------- the effect boundary
 #
@@ -544,7 +617,7 @@ if test "${EFFECTS_SKIP_BREAK_TEST:-0}" != 1; then
         's/HttpRequest(request: OutboundRequest, on_result: MsgId)/HttpRequest(request: OutboundRequest)/' \
         "$effects_breaks/continuation/contract/effects.kofun"
     if EFFECTS_MODULE="$effects_breaks/continuation" \
-        EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        EFFECTS_SKIP_BREAK_TEST=1 ROUTER_SKIP_BREAK_TEST=1 sh "$0" \
         >"$WORK/effects.break-continuation.log" 2>&1
     then
         fail 'dropping an effect continuation did not break the gate'
@@ -557,7 +630,7 @@ if test "${EFFECTS_SKIP_BREAK_TEST:-0}" != 1; then
     sed -i '/CmdTag, payload: Bytes, on_result: MsgId/d' \
         "$effects_breaks/openness/contract/effects.kofun"
     if EFFECTS_MODULE="$effects_breaks/openness" \
-        EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        EFFECTS_SKIP_BREAK_TEST=1 ROUTER_SKIP_BREAK_TEST=1 sh "$0" \
         >"$WORK/effects.break-openness.log" 2>&1
     then
         fail 'removing Cmd.Custom did not break the gate'
@@ -572,7 +645,7 @@ if test "${EFFECTS_SKIP_BREAK_TEST:-0}" != 1; then
         return step_cmd(command, request_code, timeout)/' \
         "$effects_breaks/timeout/core/effects.kofun"
     if EFFECTS_MODULE="$effects_breaks/timeout" \
-        EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        EFFECTS_SKIP_BREAK_TEST=1 ROUTER_SKIP_BREAK_TEST=1 sh "$0" \
         >"$WORK/effects.break-timeout.log" 2>&1
     then
         fail 'making timeout produce no Msg did not break the gate'
@@ -657,12 +730,12 @@ $(diff "$recorded" "$WORK/openapi.yaml" | head -12)"
 # every row appears as a method under it. Counting rather than eyeballing: a
 # projection that silently dropped a route would still cmp clean against a
 # golden regenerated from the same bug.
-table_paths=$(sed -n '1,12p' "$expected" | paste - - - | awk '{print $2}' | sort -u | wc -l)
+table_paths=$(sed -n '1,20p' "$expected" | paste - - - - | awk '{print $2}' | sort -u | wc -l)
 document_paths=$(grep -cE '^  /' "$recorded")
 test "$table_paths" -eq "$document_paths" ||
     fail "the table has $table_paths paths and the document has $document_paths"
 
-table_rows=$(sed -n '1,12p' "$expected" | paste - - - | wc -l)
+table_rows=$(sed -n '1,20p' "$expected" | paste - - - - | wc -l)
 document_ops=$(grep -cE '^      operationId:' "$recorded")
 test "$table_rows" -eq "$document_ops" ||
     fail "the table has $table_rows routes and the document has $document_ops operations"
@@ -710,8 +783,12 @@ cmp "$recorded_client" "$WORK/client.ts" ||
     fail "the generated client no longer matches the table the router runs:
 $(diff "$recorded_client" "$WORK/client.ts" | head -12)"
 
-client_paths=$(grep -cE '^  \| "/' "$recorded_client")
-table_rows=$(sed -n '1,12p' "$expected" | paste - - - | wc -l)
+# Both member shapes count: a literal route is a quoted string, a capturing
+# route is a template literal in backticks. Counting only the quoted ones
+# would let a capturing route vanish from the client while the totals still
+# looked right.
+client_paths=$(grep -cE '^  \| ("/|`/)' "$recorded_client")
+table_rows=$(sed -n '1,20p' "$expected" | paste - - - - | wc -l)
 test "$client_paths" -eq "$table_rows" ||
     fail "the table has $table_rows routes and the client exposes $client_paths"
 
@@ -726,7 +803,9 @@ if command -v tsc >/dev/null 2>&1; then
         fail "a call the table allows did not type-check:
 $(sed 's/^/    /' "$WORK/tsc.accept")"
 
-    for fixture in rejects-wrong-method rejects-unknown-path; do
+    for fixture in rejects-wrong-method rejects-unknown-path \
+        rejects-capture-template
+    do
         # shellcheck disable=SC2086
         if (cd "$WORK/ts" && tsc $TSC_FLAGS "$fixture.ts") \
             >"$WORK/tsc.$fixture" 2>&1

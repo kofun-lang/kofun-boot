@@ -6,30 +6,41 @@
 # scripts/build-seed.sh.
 
 fn emit_dispatch(table: RouteTable, request: Request) -> Int {
-    let result: RouteResult = dispatch(table, request)
+    let outcome: Dispatch = dispatch_of(table, request)
     print(request.method)
     print(request.path)
-    print(result_kind(result))
-    print(result_payload(result))
+    print(outcome.kind)
+    print(outcome.payload)
+    print(outcome.capture)
     return 0
 }
 
 fn main() -> Int {
     let table: RouteTable = boot_table()
 
-    # --- the table itself, so the golden pins the compiled form
+    # --- the table itself, so the golden pins the compiled form. Four fields
+    #     per slot: the capture flag is compiled state, not a matcher's guess,
+    #     so it belongs in the pinned form beside the method and the path.
     print(table.r0_method)
     print(table.r0_path)
     print(table.r0_handler)
+    print(table.r0_capture)
     print(table.r1_method)
     print(table.r1_path)
     print(table.r1_handler)
+    print(table.r1_capture)
     print(table.r2_method)
     print(table.r2_path)
     print(table.r2_handler)
+    print(table.r2_capture)
     print(table.r3_method)
     print(table.r3_path)
     print(table.r3_handler)
+    print(table.r3_capture)
+    print(table.r4_method)
+    print(table.r4_path)
+    print(table.r4_handler)
+    print(table.r4_capture)
 
     # --- every dispatch outcome, one per closed constructor
     let hello: Request = request_at(method_get(), path_hello(), 0)
@@ -63,6 +74,37 @@ fn main() -> Int {
     #     outside the table proves the set does not depend on the request)
     let odd_method: Request = request_at(9, path_bench(), 0)
     emit_dispatch(table, odd_method)
+
+    # --- captures. The capturing slot matches a family of paths and reports
+    #     the segment it took; the captured code is not the path, which is the
+    #     whole point and is why the golden reads them as separate fields.
+    let captured: Request = request_at(
+        method_get(),
+        path_thing() * capture_base() + 7,
+        0
+    )
+    emit_dispatch(table, captured)
+
+    # --- the same path shape on a route that does not capture. /bench is a
+    #     literal slot, so a request built the way a captured path is built
+    #     does not match it and no capture is reported: the flag decides, not
+    #     the shape of the code.
+    let shaped_but_literal: Request = request_at(
+        method_get(),
+        path_bench() * capture_base() + 7,
+        0
+    )
+    emit_dispatch(table, shaped_but_literal)
+
+    # --- a capturing slot still answers for its method. Without this, the
+    #     Allow set could quietly stop seeing capturing slots and nothing
+    #     above would notice.
+    let captured_wrong_method: Request = request_at(
+        method_post(),
+        path_thing() * capture_base() + 7,
+        0
+    )
+    emit_dispatch(table, captured_wrong_method)
 
     # --- handlers are pure: the same request and the same capability record
     #     produce the same response, and time is the injected field

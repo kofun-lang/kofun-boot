@@ -26,6 +26,7 @@ export type BootMethod = "get" | "post";
 export type GetPath =
   | "/hello"
   | "/bench"
+  | `/things/${number}`
 
 export type PostPath =
   | "/sum"

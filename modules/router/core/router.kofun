@@ -37,6 +37,30 @@ fn path_bench() -> Int {
     return 103
 }
 
+# The base of a capturing route: `/things/:id`. A slot declares the base; a
+# request against it arrives as base * capture_base() + the captured code.
+fn path_thing() -> Int {
+    return 104
+}
+
+# How a captured code is carried inside a path code. The canonical surface
+# routes on Text segments and captures a segment; the Core has no Text in
+# records, so the captured value rides in the low digits of the path code and
+# the base is what a slot matches on. The arithmetic is the projection, not the
+# rule: the rule is that a capturing slot matches a family and a non-capturing
+# slot matches one code.
+fn capture_base() -> Int {
+    return 1000
+}
+
+fn capturing() -> Int {
+    return 1
+}
+
+fn literal() -> Int {
+    return 0
+}
+
 fn body_limit() -> Int {
     return 4096
 }
@@ -67,11 +91,15 @@ type Request = {
     body_bytes: Int,
 }
 
-# One route slot: the compiled form of one contract line.
+# One route slot: the compiled form of one contract line. The capture flag is
+# part of the slot rather than inferred from the path code, so what a route
+# captures is a compiled property a reader can see rather than a shape a
+# matcher guesses at.
 type Route = {
     method: Int,
     path: Int,
     handler: Int,
+    capture: Int,
 }
 
 # The whole table. Fixed shape, because the table is data at build time —
@@ -80,15 +108,23 @@ type RouteTable = {
     r0_method: Int,
     r0_path: Int,
     r0_handler: Int,
+    r0_capture: Int,
     r1_method: Int,
     r1_path: Int,
     r1_handler: Int,
+    r1_capture: Int,
     r2_method: Int,
     r2_path: Int,
     r2_handler: Int,
+    r2_capture: Int,
     r3_method: Int,
     r3_path: Int,
     r3_handler: Int,
+    r3_capture: Int,
+    r4_method: Int,
+    r4_path: Int,
+    r4_handler: Int,
+    r4_capture: Int,
 }
 
 # The closed dispatch result. Every failure carries what was observed:
@@ -99,6 +135,22 @@ type RouteResult =
     | NotFound(path: Int)
     | MethodNotAllowed(allowed: Int)
     | PayloadTooLarge(limit: Int)
+
+# One dispatch outcome, flattened. A Matched result now has two things to
+# report — the handler and what the route captured — and the slice allows one
+# payload per constructor. So the capture travels in a record beside the sum
+# rather than as a second payload, which is the shape modules/effects uses for
+# EffectStep and the language uses for its tzdb surfaces.
+#
+# The capture is printed for every outcome, not only for Matched. A field that
+# appears only when it is interesting cannot be read for absence, and absence
+# — this route captured nothing — is the property that distinguishes a
+# capturing slot from a literal one.
+type Dispatch = {
+    kind: Int,
+    payload: Int,
+    capture: Int,
+}
 
 # The one capability a seed handler receives. There is no ambient clock to
 # reach instead — that is the language, and the framework keeps it that way.
@@ -143,15 +195,23 @@ fn boot_table() -> RouteTable {
         r0_method: method_get(),
         r0_path: path_hello(),
         r0_handler: 1,
+        r0_capture: literal(),
         r1_method: method_post(),
         r1_path: path_sum(),
         r1_handler: 2,
+        r1_capture: literal(),
         r2_method: method_get(),
         r2_path: path_bench(),
         r2_handler: 3,
+        r2_capture: literal(),
         r3_method: method_post(),
         r3_path: path_bench(),
-        r3_handler: 4
+        r3_handler: 4,
+        r3_capture: literal(),
+        r4_method: method_get(),
+        r4_path: path_thing(),
+        r4_handler: 5,
+        r4_capture: capturing()
     )
     return table
 }
@@ -165,12 +225,34 @@ fn eq_flag(left: Int, right: Int) -> Int {
     return 0
 }
 
-# How many slots share the request's path. Four comparisons, always.
+# Whether one slot's path matches the request's, which is the only place the
+# capture flag changes the matcher. A capturing slot matches the family that
+# shares its base; a literal slot matches its code exactly, so a request whose
+# path merely *looks* captured — a code with the same digit shape — does not
+# match a literal slot that happens to sit at its base.
+fn slot_hit(slot_path: Int, slot_capture: Int, request_path: Int) -> Int {
+    if slot_capture == capturing() {
+        return eq_flag(request_path // capture_base(), slot_path)
+    }
+    return eq_flag(request_path, slot_path)
+}
+
+# What a slot captured from the request's path. A literal slot captures
+# nothing, and says so with 0 rather than by omitting the value.
+fn slot_capture(slot_capture_flag: Int, request_path: Int) -> Int {
+    if slot_capture_flag == capturing() {
+        return request_path % capture_base()
+    }
+    return 0
+}
+
+# How many slots share the request's path. Five comparisons, always.
 fn path_hits(table: RouteTable, request: Request) -> Int {
-    return eq_flag(table.r0_path, request.path)
-        + eq_flag(table.r1_path, request.path)
-        + eq_flag(table.r2_path, request.path)
-        + eq_flag(table.r3_path, request.path)
+    return slot_hit(table.r0_path, table.r0_capture, request.path)
+        + slot_hit(table.r1_path, table.r1_capture, request.path)
+        + slot_hit(table.r2_path, table.r2_capture, request.path)
+        + slot_hit(table.r3_path, table.r3_capture, request.path)
+        + slot_hit(table.r4_path, table.r4_capture, request.path)
 }
 
 # The Allow set for the request's path, as method bits. A slot contributes its
@@ -178,28 +260,60 @@ fn path_hits(table: RouteTable, request: Request) -> Int {
 # yields 3. Sums stay exact because each slot contributes one bit at most
 # and the two bits are distinct powers of two.
 fn allowed_set(table: RouteTable, request: Request) -> Int {
-    return eq_flag(table.r0_path, request.path) * method_bit(table.r0_method)
-        + eq_flag(table.r1_path, request.path) * method_bit(table.r1_method)
-        + eq_flag(table.r2_path, request.path) * method_bit(table.r2_method)
-        + eq_flag(table.r3_path, request.path) * method_bit(table.r3_method)
+    return slot_hit(table.r0_path, table.r0_capture, request.path)
+            * method_bit(table.r0_method)
+        + slot_hit(table.r1_path, table.r1_capture, request.path)
+            * method_bit(table.r1_method)
+        + slot_hit(table.r2_path, table.r2_capture, request.path)
+            * method_bit(table.r2_method)
+        + slot_hit(table.r3_path, table.r3_capture, request.path)
+            * method_bit(table.r3_method)
+        + slot_hit(table.r4_path, table.r4_capture, request.path)
+            * method_bit(table.r4_method)
 }
 
 # The handler for the slot whose method AND path both match, or 0. At most one
 # slot can match because the table refuses duplicate (method, path) pairs at
 # build time — the gate proves the table holds that today.
 fn matched_handler(table: RouteTable, request: Request) -> Int {
-    let hit0: Int = eq_flag(table.r0_path, request.path)
+    let hit0: Int = slot_hit(table.r0_path, table.r0_capture, request.path)
         * eq_flag(table.r0_method, request.method)
-    let hit1: Int = eq_flag(table.r1_path, request.path)
+    let hit1: Int = slot_hit(table.r1_path, table.r1_capture, request.path)
         * eq_flag(table.r1_method, request.method)
-    let hit2: Int = eq_flag(table.r2_path, request.path)
+    let hit2: Int = slot_hit(table.r2_path, table.r2_capture, request.path)
         * eq_flag(table.r2_method, request.method)
-    let hit3: Int = eq_flag(table.r3_path, request.path)
+    let hit3: Int = slot_hit(table.r3_path, table.r3_capture, request.path)
         * eq_flag(table.r3_method, request.method)
+    let hit4: Int = slot_hit(table.r4_path, table.r4_capture, request.path)
+        * eq_flag(table.r4_method, request.method)
     return hit0 * table.r0_handler
         + hit1 * table.r1_handler
         + hit2 * table.r2_handler
         + hit3 * table.r3_handler
+        + hit4 * table.r4_handler
+}
+
+# What the matching slot captured, or 0. Same fixed-rank shape as the handler
+# lookup and for the same reason: at most one slot matches, so the sum is that
+# slot's capture. A slot that matched on method alone contributes nothing,
+# which is what keeps this from reporting a capture for a route that was not
+# taken.
+fn matched_capture(table: RouteTable, request: Request) -> Int {
+    let hit0: Int = slot_hit(table.r0_path, table.r0_capture, request.path)
+        * eq_flag(table.r0_method, request.method)
+    let hit1: Int = slot_hit(table.r1_path, table.r1_capture, request.path)
+        * eq_flag(table.r1_method, request.method)
+    let hit2: Int = slot_hit(table.r2_path, table.r2_capture, request.path)
+        * eq_flag(table.r2_method, request.method)
+    let hit3: Int = slot_hit(table.r3_path, table.r3_capture, request.path)
+        * eq_flag(table.r3_method, request.method)
+    let hit4: Int = slot_hit(table.r4_path, table.r4_capture, request.path)
+        * eq_flag(table.r4_method, request.method)
+    return hit0 * slot_capture(table.r0_capture, request.path)
+        + hit1 * slot_capture(table.r1_capture, request.path)
+        + hit2 * slot_capture(table.r2_capture, request.path)
+        + hit3 * slot_capture(table.r3_capture, request.path)
+        + hit4 * slot_capture(table.r4_capture, request.path)
 }
 
 # The dispatch order is the contract, and the gate reads it: size before
@@ -219,6 +333,26 @@ fn dispatch(table: RouteTable, request: Request) -> RouteResult {
         return NotFound(request.path)
     }
     return MethodNotAllowed(allowed_set(table, request))
+}
+
+# The dispatch outcome as one flat value: the closed result, plus what the
+# route captured. Only a Matched result can carry a capture — a NotFound
+# carries the path it did not match, and reporting a capture beside it would
+# claim a route was taken. So the capture is read from the table only when a
+# handler was found, and is 0 otherwise.
+fn dispatch_of(table: RouteTable, request: Request) -> Dispatch {
+    let result: RouteResult = dispatch(table, request)
+    let kind: Int = result_kind(result)
+    let mut capture: Int = 0
+    if kind == kind_matched() {
+        capture = matched_capture(table, request)
+    }
+    let outcome: Dispatch = Dispatch(
+        kind: kind,
+        payload: result_payload(result),
+        capture: capture
+    )
+    return outcome
 }
 
 # A request value. A constructor is pure data assembly, so it belongs to the

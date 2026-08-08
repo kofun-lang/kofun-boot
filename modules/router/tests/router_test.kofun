@@ -12,7 +12,7 @@
 
 # ------------------------------------------------------------- the table
 
-fn test_table_is_the_four_declared_routes() -> Int {
+fn test_table_is_the_five_declared_routes() -> Int {
     let table: RouteTable = boot_table()
     let mut failures = 0
     failures = failures + expect_eq_int(table.r0_method, method_get())
@@ -22,6 +22,23 @@ fn test_table_is_the_four_declared_routes() -> Int {
     failures = failures + expect_eq_int(table.r1_path, path_sum())
     failures = failures + expect_eq_int(table.r2_path, path_bench())
     failures = failures + expect_eq_int(table.r3_path, path_bench())
+    failures = failures + expect_eq_int(table.r4_method, method_get())
+    failures = failures + expect_eq_int(table.r4_path, path_thing())
+    failures = failures + expect_eq_int(table.r4_handler, 5)
+    return failures
+}
+
+# Which slots capture is compiled state, and only one slot does. A test that
+# read the flag off the slot it was about would pass no matter how many other
+# slots quietly became capturing, so every slot is named.
+fn test_exactly_one_slot_captures() -> Int {
+    let table: RouteTable = boot_table()
+    let mut failures = 0
+    failures = failures + expect_eq_int(table.r0_capture, literal())
+    failures = failures + expect_eq_int(table.r1_capture, literal())
+    failures = failures + expect_eq_int(table.r2_capture, literal())
+    failures = failures + expect_eq_int(table.r3_capture, literal())
+    failures = failures + expect_eq_int(table.r4_capture, capturing())
     return failures
 }
 
@@ -35,12 +52,101 @@ fn test_no_two_slots_share_a_method_and_path() -> Int {
     let pair1: Int = table.r1_method * 1000 + table.r1_path
     let pair2: Int = table.r2_method * 1000 + table.r2_path
     let pair3: Int = table.r3_method * 1000 + table.r3_path
+    let pair4: Int = table.r4_method * 1000 + table.r4_path
     failures = failures + expect_ne_int(pair0, pair1)
     failures = failures + expect_ne_int(pair0, pair2)
     failures = failures + expect_ne_int(pair0, pair3)
+    failures = failures + expect_ne_int(pair0, pair4)
     failures = failures + expect_ne_int(pair1, pair2)
     failures = failures + expect_ne_int(pair1, pair3)
+    failures = failures + expect_ne_int(pair1, pair4)
     failures = failures + expect_ne_int(pair2, pair3)
+    failures = failures + expect_ne_int(pair2, pair4)
+    failures = failures + expect_ne_int(pair3, pair4)
+    return failures
+}
+
+# -------------------------------------------------------------- captures
+
+# The claim the whole capture rule stands on: what the route captured is not
+# the path it matched. Asserting only that a capture was reported would be
+# satisfied by echoing the path, so both are named and compared.
+fn test_a_capturing_route_reports_the_segment_not_the_path() -> Int {
+    let table: RouteTable = boot_table()
+    let path: Int = path_thing() * capture_base() + 7
+    let request: Request = request_at(method_get(), path, 0)
+    let outcome: Dispatch = dispatch_of(table, request)
+    let mut failures = 0
+    failures = failures + expect_eq_int(outcome.kind, kind_matched())
+    failures = failures + expect_eq_int(outcome.payload, 5)
+    failures = failures + expect_eq_int(outcome.capture, 7)
+    failures = failures + expect_ne_int(outcome.capture, path)
+    return failures
+}
+
+# The flag decides, not the shape of the code. A request built exactly the way
+# a captured path is built, aimed at a literal route, matches nothing.
+fn test_a_captured_looking_path_does_not_match_a_literal_route() -> Int {
+    let table: RouteTable = boot_table()
+    let path: Int = path_bench() * capture_base() + 7
+    let request: Request = request_at(method_get(), path, 0)
+    let outcome: Dispatch = dispatch_of(table, request)
+    let mut failures = 0
+    failures = failures + expect_eq_int(outcome.kind, kind_not_found())
+    failures = failures + expect_eq_int(outcome.payload, path)
+    failures = failures + expect_eq_int(outcome.capture, 0)
+    return failures
+}
+
+# A refusal took no route, so it captured nothing. A capture reported beside a
+# MethodNotAllowed would claim a handler ran.
+fn test_a_refusal_carries_no_capture() -> Int {
+    let table: RouteTable = boot_table()
+    let path: Int = path_thing() * capture_base() + 7
+    let request: Request = request_at(method_post(), path, 0)
+    let outcome: Dispatch = dispatch_of(table, request)
+    let mut failures = 0
+    failures = failures
+        + expect_eq_int(outcome.kind, kind_method_not_allowed())
+    failures = failures + expect_eq_int(outcome.payload, 1)
+    failures = failures + expect_eq_int(outcome.capture, 0)
+    return failures
+}
+
+# A capturing slot matches a family, so two different captures reach the same
+# handler and report different segments. One example proves neither.
+fn test_two_captures_reach_one_handler_and_stay_distinct() -> Int {
+    let table: RouteTable = boot_table()
+    let first: Request = request_at(
+        method_get(),
+        path_thing() * capture_base() + 7,
+        0
+    )
+    let second: Request = request_at(
+        method_get(),
+        path_thing() * capture_base() + 900,
+        0
+    )
+    let one: Dispatch = dispatch_of(table, first)
+    let other: Dispatch = dispatch_of(table, second)
+    let mut failures = 0
+    failures = failures + expect_eq_int(one.payload, other.payload)
+    failures = failures + expect_eq_int(one.capture, 7)
+    failures = failures + expect_eq_int(other.capture, 900)
+    failures = failures + expect_ne_int(one.capture, other.capture)
+    return failures
+}
+
+# A literal route still reports its outcome through the same record, and its
+# capture is 0 rather than absent — the field is readable for absence.
+fn test_a_literal_route_captures_nothing() -> Int {
+    let table: RouteTable = boot_table()
+    let request: Request = request_at(method_get(), path_hello(), 0)
+    let outcome: Dispatch = dispatch_of(table, request)
+    let mut failures = 0
+    failures = failures + expect_eq_int(outcome.kind, kind_matched())
+    failures = failures + expect_eq_int(outcome.payload, 1)
+    failures = failures + expect_eq_int(outcome.capture, 0)
     return failures
 }
 

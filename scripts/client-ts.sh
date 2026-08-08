@@ -33,9 +33,9 @@ if test -z "$router"; then
 fi
 test -x "$router" || fail "no built router at $router"
 
-table=$("$router" | sed -n '1,12p')
-test "$(printf '%s\n' "$table" | wc -l)" -eq 12 ||
-    fail 'the router did not print a twelve-line table'
+table=$("$router" | sed -n '1,20p')
+test "$(printf '%s\n' "$table" | wc -l)" -eq 20 ||
+    fail 'the router did not print a twenty-line table'
 
 # The seam the slice forces, shared with the OpenAPI projection: the table
 # carries path codes because a record cannot hold Text. Resolved up front, in
@@ -46,8 +46,23 @@ path_name() {
         101) printf '/hello' ;;
         102) printf '/sum' ;;
         103) printf '/bench' ;;
+        104) printf '/things/{id}' ;;
         *) return 1 ;;
     esac
+}
+
+# What a route contributes to a path union. A literal route is a string
+# literal, so only that exact path type-checks. A capturing route is a
+# template literal type: `/things/${number}` accepts /things/7 and rejects
+# /things/seven, and — the point — does not accept the template itself.
+# Emitting "/things/{id}" as a literal would make the one call nobody can
+# perform the only one that compiles.
+path_type() {
+    if test "$2" = 1; then
+        printf '`%s`' "$(path_name "$1" | sed 's/{id}/${number}/')"
+    else
+        printf '"%s"' "$(path_name "$1")"
+    fi
 }
 
 method_name() {
@@ -58,7 +73,7 @@ method_name() {
     esac
 }
 
-rows=$(printf '%s\n' "$table" | paste - - -)
+rows=$(printf '%s\n' "$table" | paste - - - -)
 codes=$(printf '%s\n' "$rows" | awk '{print $2}' | sort -un)
 
 for code in $codes; do
@@ -73,13 +88,13 @@ done
 emit_route_union() {
     wanted=$1
     first=1
-    printf '%s\n' "$rows" | while IFS='	' read -r method path handler; do
+    printf '%s\n' "$rows" | while IFS='	' read -r method path handler capture; do
         test "$(method_name "$method")" = "$wanted" || continue
         if test "$first" -eq 1; then
-            printf '  | "%s"' "$(path_name "$path")"
+            printf '  | %s' "$(path_type "$path" "$capture")"
             first=0
         else
-            printf '\n  | "%s"' "$(path_name "$path")"
+            printf '\n  | %s' "$(path_type "$path" "$capture")"
         fi
     done
     # `never` when a method has no routes: the call site then fails to compile

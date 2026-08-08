@@ -34,3 +34,16 @@ paths:
         "404": { description: no route matched }
         "405": { description: method not allowed }
         "413": { description: body over the limit }
+  /things/{id}:
+    get:
+      operationId: handler5
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: ok }
+        "404": { description: no route matched }
+        "405": { description: method not allowed }
+        "413": { description: body over the limit }
