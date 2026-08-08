@@ -1,0 +1,38 @@
+# Jekyll configuration for the kofun-boot documentation site.
+#
+# Existing documents deliberately keep their current bytes. The deterministic
+# research pack copies a named list of them verbatim, so adding front matter to
+# those files would change its SHA-256. These GitHub Pages plugins render the
+# files as they are instead.
+
+title: kofun-boot
+description: >-
+  An application is a pure function from its capabilities to its behaviour;
+  kofun-boot is the shell that wires, serves, replays, and measures it.
+
+theme: jekyll-theme-primer
+
+plugins:
+  - jekyll-optional-front-matter
+  - jekyll-titles-from-headings
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: false
+
+optional_front_matter:
+  remove_originals: true
+
+titles_from_headings:
+  enabled: true
+  strip_title: false
+  collections: false
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+
+url: https://kofun-lang.github.io
+baseurl: /kofun-boot
