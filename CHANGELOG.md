@@ -13,6 +13,25 @@ the `Unmeasured at this release` section added as a local requirement.
 
 Nothing yet.
 
+## [0.5.1] - 2026-08-11
+
+The post-release development line after 0.5.0. No framework capability changes
+in this version-opening commit.
+
+### Changed
+
+- **Opened the next patch version after `v0.5.0`** so the release gate can keep
+  detecting accidental reuse of an already-published version on `main`.
+- **Repaired the changelog comparison links** to include the 0.5.0 release.
+
+### Unmeasured at this release
+
+- Speed — L5; the benchmark harness exists and refuses to produce a number it
+  does not trust, but no baseline has been recorded.
+- Desktop lighter than Tauri — L9; blocked on the language's wasm32 activation
+  lanes, and gated behind IME and accessibility conformance before any number
+  is recorded ([#29](https://github.com/kofun-lang/kofun-boot/issues/29)).
+
 ## [0.5.0] - 2026-08-08
 
 Router captures, a runtime capability manifest, and protocol status decisions
@@ -396,7 +415,9 @@ is blocked on the lane named beside it.
 - `0.x` makes no API stability promise. Minors may break the contract surface;
   this file will say so when they do.
 
-[Unreleased]: https://github.com/kofun-lang/kofun-boot/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kofun-lang/kofun-boot/compare/v0.5.0...HEAD
+[0.5.1]: https://github.com/kofun-lang/kofun-boot/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/kofun-lang/kofun-boot/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/kofun-lang/kofun-boot/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kofun-lang/kofun-boot/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kofun-lang/kofun-boot/compare/v0.2.0...v0.3.0
