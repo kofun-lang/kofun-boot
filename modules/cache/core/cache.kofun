@@ -1,0 +1,847 @@
+# kofun-boot declared caches: a key that is the handler's arguments, a
+# lifetime, and tags that writes invalidate.
+#
+# Next.js changed what it caches by default three times. 14 cached `fetch`,
+# 15 stopped, and 16 made "use cache" opt-in, with the cache key inferred by
+# the compiler from what the cached function reads. An inferred key is only
+# as complete as the inference: one input the compiler does not see, and two
+# requests that differ in it share an entry. That is how a page rendered for
+# one user is served to another.
+#
+# Here a read handler is a pure function. It can read no cookie, header, or
+# param it was not passed, so its arguments are all of its inputs, and a key
+# built from them is complete. The rule is checked, not hoped for:
+#
+#   the key must hold every argument the handler takes   KeyOmits(argument)
+#   and nothing the handler does not take                KeyForeign(argument)
+#   a cache that never expires needs a write that drops  Uninvalidated(tag)
+#   each of its tags, and needs at least one tag         NeverRefreshed(read)
+#
+# The key is checked first, because a stale answer is a bug and a leaked one
+# is an incident.
+#
+# The cache itself is a value, the way modules/mock's store is: a session is
+# a fold over calls, each call returns the next entries, and the trace of hits
+# and misses replays byte for byte. The in-memory adapter is these four
+# slots; a shared backend is a capability the serve lane adds (#2).
+#
+# ../contract/cache.kofun holds the canonical surface. This file projects it
+# into the Stage 2 slice: argument and tag sets are bit masks, the entries are
+# four fixed slots, and every record is flat.
+
+# ------------------------------------------------------------- constants
+
+# The arguments a read handler may take, besides the data it reads, as bits.
+# A key is a mask over the same bits, so "the key holds every argument" is
+# arithmetic. tests/cache/check.sh reads the handlers' signatures below and
+# refuses a declared argument mask that disagrees with them, naming the
+# parameter.
+fn arg_id() -> Int {
+    return 1
+}
+
+fn arg_caller() -> Int {
+    return 2
+}
+
+# Tags, as bits. `things` is the collection. `thing` is one row, scoped by
+# the id argument: a write to row 3 drops what was cached about row 3, and
+# what was cached under a key that names no row at all.
+fn tag_things() -> Int {
+    return 1
+}
+
+fn tag_thing() -> Int {
+    return 2
+}
+
+# Calls: three reads, then two writes.
+fn op_list() -> Int {
+    return 1
+}
+
+fn op_show() -> Int {
+    return 2
+}
+
+fn op_mine() -> Int {
+    return 3
+}
+
+fn op_put() -> Int {
+    return 4
+}
+
+fn op_give() -> Int {
+    return 5
+}
+
+# A lifetime of zero never expires. Such a cache is fresh only if every
+# write that changes what it holds drops it, which is what the check asks.
+fn lifetime_forever() -> Int {
+    return 0
+}
+
+fn capacity() -> Int {
+    return 4
+}
+
+fn check_sound() -> Int {
+    return 1
+}
+
+fn check_key_omits() -> Int {
+    return 2
+}
+
+fn check_key_foreign() -> Int {
+    return 3
+}
+
+fn check_uninvalidated() -> Int {
+    return 4
+}
+
+fn check_never_refreshed() -> Int {
+    return 5
+}
+
+fn event_miss() -> Int {
+    return 1
+}
+
+fn event_hit() -> Int {
+    return 2
+}
+
+fn event_expired() -> Int {
+    return 3
+}
+
+fn event_invalidated() -> Int {
+    return 4
+}
+
+# ---------------------------------------------------------------- values
+
+# A cache declared on a read endpoint. `key` and `tags` are masks; the
+# lifetime is in seconds, or lifetime_forever().
+type Cache = {
+    read: Int,
+    key: Int,
+    lifetime: Int,
+    tags: Int,
+}
+
+# What a write declares it changes.
+type Write = {
+    write: Int,
+    invalidates: Int,
+}
+
+# The build-time verdict on one declared cache. Every refusal names what it
+# found: the argument, the tag, or the read.
+type CacheCheck =
+    | Sound(read: Int)
+    | KeyOmits(argument: Int)
+    | KeyForeign(argument: Int)
+    | Uninvalidated(tag: Int)
+    | NeverRefreshed(read: Int)
+
+# What one call did to the cache. A read carries the value it served; a write
+# carries how many entries it dropped.
+type CacheEvent =
+    | Miss(value: Int)
+    | Hit(value: Int)
+    | Expired(value: Int)
+    | Invalidated(dropped: Int)
+
+# The data the reads stand in front of: three rows, each with a value and an
+# owner.
+type Things = {
+    v1: Int,
+    v2: Int,
+    v3: Int,
+    o1: Int,
+    o2: Int,
+    o3: Int,
+}
+
+# One call. `now` is the time the shell's clock capability read; the core
+# has no clock of its own.
+type Call = {
+    op: Int,
+    id: Int,
+    value: Int,
+    caller: Int,
+    now: Int,
+}
+
+# The in-memory adapter: four slots of read, key, value, and when the value
+# was stored. A slot whose read is zero is empty. The key fields hold the
+# call's arguments masked by the declared key, so a key that leaves the
+# caller out stores zero there, and every caller finds the same entry.
+type Entries = {
+    e1_read: Int,
+    e1_id: Int,
+    e1_caller: Int,
+    e1_value: Int,
+    e1_at: Int,
+    e2_read: Int,
+    e2_id: Int,
+    e2_caller: Int,
+    e2_value: Int,
+    e2_at: Int,
+    e3_read: Int,
+    e3_id: Int,
+    e3_caller: Int,
+    e3_value: Int,
+    e3_at: Int,
+    e4_read: Int,
+    e4_id: Int,
+    e4_caller: Int,
+    e4_value: Int,
+    e4_at: Int,
+}
+
+# ----------------------------------------------------------- arithmetic
+
+fn eq(left: Int, right: Int) -> Int {
+    if left == right {
+        return 1
+    }
+    return 0
+}
+
+fn has(mask: Int, bit: Int) -> Int {
+    return (mask // bit) % 2
+}
+
+fn is_read(op: Int) -> Int {
+    if op <= op_mine() {
+        return 1
+    }
+    return 0
+}
+
+# ---------------------------------------------------------- declarations
+
+fn cache(read: Int, key: Int, lifetime: Int, tags: Int) -> Cache {
+    let declared: Cache = Cache(read: read, key: key, lifetime: lifetime, tags: tags)
+    return declared
+}
+
+fn invalidating(write: Int, invalidates: Int) -> Write {
+    let declared: Write = Write(write: write, invalidates: invalidates)
+    return declared
+}
+
+# The caches this application declares, one per read endpoint.
+fn cache_of(read: Int) -> Cache {
+    if read == op_list() {
+        return cache(op_list(), 0, 60, tag_things())
+    }
+    if read == op_show() {
+        return cache(op_show(), arg_id(), lifetime_forever(), tag_thing())
+    }
+    return cache(op_mine(), arg_id() + arg_caller(), 30, tag_thing())
+}
+
+# The arguments each read handler takes besides the data, as a mask. The
+# canonical surface derives this from the handler's parameters; the slice
+# has no reflection, so it is declared here and the gate compares it with
+# the signatures of read_list, read_show, and read_mine.
+fn read_args(read: Int) -> Int {
+    if read == op_list() {
+        return 0
+    }
+    if read == op_show() {
+        return arg_id()
+    }
+    return arg_id() + arg_caller()
+}
+
+# The tags each write invalidates. Giving a row away changes who may read
+# it, not its value, so it drops `thing` and leaves the collection alone.
+fn write_of(write: Int) -> Write {
+    if write == op_put() {
+        return invalidating(op_put(), tag_things() + tag_thing())
+    }
+    return invalidating(op_give(), tag_thing())
+}
+
+# Every tag some declared write invalidates, as a mask.
+fn covered_tags() -> Int {
+    let put: Write = write_of(op_put())
+    let give: Write = write_of(op_give())
+    let mut covered = 0
+    if has(put.invalidates, tag_things()) + has(give.invalidates, tag_things()) > 0 {
+        covered = covered + tag_things()
+    }
+    if has(put.invalidates, tag_thing()) + has(give.invalidates, tag_thing()) > 0 {
+        covered = covered + tag_thing()
+    }
+    return covered
+}
+
+# --------------------------------------------------------------- the check
+
+# The lowest argument bit `wanted` holds and `held` does not, or 0.
+fn first_missing(wanted: Int, held: Int) -> Int {
+    if has(wanted, arg_id()) * (1 - has(held, arg_id())) == 1 {
+        return arg_id()
+    }
+    if has(wanted, arg_caller()) * (1 - has(held, arg_caller())) == 1 {
+        return arg_caller()
+    }
+    return 0
+}
+
+# The lowest tag in `tags` that no write in `covered` drops, or 0.
+fn first_uncovered(tags: Int, covered: Int) -> Int {
+    if has(tags, tag_things()) * (1 - has(covered, tag_things())) == 1 {
+        return tag_things()
+    }
+    if has(tags, tag_thing()) * (1 - has(covered, tag_thing())) == 1 {
+        return tag_thing()
+    }
+    return 0
+}
+
+# The build-time check, for any declared cache: `args` is what its handler
+# takes, and `covered` is every tag some write drops. A probe passes values
+# the application does not declare, so each refusal is shown to fire.
+fn check(declared: Cache, args: Int, covered: Int) -> CacheCheck {
+    let omitted: Int = first_missing(args, declared.key)
+    if omitted > 0 {
+        return KeyOmits(omitted)
+    }
+    let foreign: Int = first_missing(declared.key, args)
+    if foreign > 0 {
+        return KeyForeign(foreign)
+    }
+    # A finite lifetime bounds how stale an entry can be, whoever forgot to
+    # drop it.
+    if declared.lifetime != lifetime_forever() {
+        return Sound(declared.read)
+    }
+    if declared.tags == 0 {
+        return NeverRefreshed(declared.read)
+    }
+    let uncovered: Int = first_uncovered(declared.tags, covered)
+    if uncovered > 0 {
+        return Uninvalidated(uncovered)
+    }
+    return Sound(declared.read)
+}
+
+fn check_read(read: Int) -> CacheCheck {
+    let declared: Cache = cache_of(read)
+    return check(declared, read_args(read), covered_tags())
+}
+
+fn check_kind(verdict: CacheCheck) -> Int {
+    let mut kind = 0
+    match verdict {
+        Sound(_) => { kind = check_sound() },
+        KeyOmits(_) => { kind = check_key_omits() },
+        KeyForeign(_) => { kind = check_key_foreign() },
+        Uninvalidated(_) => { kind = check_uninvalidated() },
+        NeverRefreshed(_) => { kind = check_never_refreshed() },
+    }
+    return kind
+}
+
+fn check_payload(verdict: CacheCheck) -> Int {
+    let mut payload = 0
+    match verdict {
+        Sound(read) => { payload = read },
+        KeyOmits(argument) => { payload = argument },
+        KeyForeign(argument) => { payload = argument },
+        Uninvalidated(tag) => { payload = tag },
+        NeverRefreshed(read) => { payload = read },
+    }
+    return payload
+}
+
+# -------------------------------------------------------------- the data
+
+fn seeded_things() -> Things {
+    let things: Things = Things(v1: 10, v2: 20, v3: 30, o1: 7, o2: 9, o3: 7)
+    return things
+}
+
+fn value_of(things: Things, id: Int) -> Int {
+    return eq(id, 1) * things.v1 + eq(id, 2) * things.v2 + eq(id, 3) * things.v3
+}
+
+fn owner_of(things: Things, id: Int) -> Int {
+    return eq(id, 1) * things.o1 + eq(id, 2) * things.o2 + eq(id, 3) * things.o3
+}
+
+# The read handlers. Their parameters after `things` are the arguments a key
+# must hold; the gate reads these three signatures.
+fn read_list(things: Things) -> Int {
+    return things.v1 + things.v2 + things.v3
+}
+
+fn read_show(things: Things, id: Int) -> Int {
+    return value_of(things, id)
+}
+
+# A caller sees the value of a row they own, and 0 for one they do not. The
+# answer depends on who asks, which is why the key must hold the caller.
+fn read_mine(things: Things, id: Int, caller: Int) -> Int {
+    return eq(owner_of(things, id), caller) * value_of(things, id)
+}
+
+# What a read returns with no cache in front of it. The gate holds every
+# served value to this.
+fn fresh(things: Things, call: Call) -> Int {
+    if call.op == op_list() {
+        return read_list(things)
+    }
+    if call.op == op_show() {
+        return read_show(things, call.id)
+    }
+    if call.op == op_mine() {
+        return read_mine(things, call.id, call.caller)
+    }
+    return 0
+}
+
+fn things_after(things: Things, call: Call) -> Things {
+    let mut v1 = things.v1
+    let mut v2 = things.v2
+    let mut v3 = things.v3
+    let mut o1 = things.o1
+    let mut o2 = things.o2
+    let mut o3 = things.o3
+    if call.op == op_put() {
+        v1 = v1 + eq(call.id, 1) * (call.value - v1)
+        v2 = v2 + eq(call.id, 2) * (call.value - v2)
+        v3 = v3 + eq(call.id, 3) * (call.value - v3)
+    }
+    if call.op == op_give() {
+        o1 = o1 + eq(call.id, 1) * (call.caller - o1)
+        o2 = o2 + eq(call.id, 2) * (call.caller - o2)
+        o3 = o3 + eq(call.id, 3) * (call.caller - o3)
+    }
+    let after: Things = Things(v1: v1, v2: v2, v3: v3, o1: o1, o2: o2, o3: o3)
+    return after
+}
+
+fn call_of(op: Int, id: Int, value: Int, caller: Int, now: Int) -> Call {
+    let call: Call = Call(op: op, id: id, value: value, caller: caller, now: now)
+    return call
+}
+
+# ------------------------------------------------------------- the entries
+
+fn no_entries() -> Entries {
+    let entries: Entries = Entries(
+        e1_read: 0, e1_id: 0, e1_caller: 0, e1_value: 0, e1_at: 0,
+        e2_read: 0, e2_id: 0, e2_caller: 0, e2_value: 0, e2_at: 0,
+        e3_read: 0, e3_id: 0, e3_caller: 0, e3_value: 0, e3_at: 0,
+        e4_read: 0, e4_id: 0, e4_caller: 0, e4_value: 0, e4_at: 0
+    )
+    return entries
+}
+
+fn entry_read(entries: Entries, slot: Int) -> Int {
+    if slot == 1 {
+        return entries.e1_read
+    }
+    if slot == 2 {
+        return entries.e2_read
+    }
+    if slot == 3 {
+        return entries.e3_read
+    }
+    return entries.e4_read
+}
+
+fn entry_id(entries: Entries, slot: Int) -> Int {
+    if slot == 1 {
+        return entries.e1_id
+    }
+    if slot == 2 {
+        return entries.e2_id
+    }
+    if slot == 3 {
+        return entries.e3_id
+    }
+    return entries.e4_id
+}
+
+fn entry_caller(entries: Entries, slot: Int) -> Int {
+    if slot == 1 {
+        return entries.e1_caller
+    }
+    if slot == 2 {
+        return entries.e2_caller
+    }
+    if slot == 3 {
+        return entries.e3_caller
+    }
+    return entries.e4_caller
+}
+
+fn entry_value(entries: Entries, slot: Int) -> Int {
+    if slot == 1 {
+        return entries.e1_value
+    }
+    if slot == 2 {
+        return entries.e2_value
+    }
+    if slot == 3 {
+        return entries.e3_value
+    }
+    return entries.e4_value
+}
+
+fn entry_at(entries: Entries, slot: Int) -> Int {
+    if slot == 1 {
+        return entries.e1_at
+    }
+    if slot == 2 {
+        return entries.e2_at
+    }
+    if slot == 3 {
+        return entries.e3_at
+    }
+    return entries.e4_at
+}
+
+fn live_entries(entries: Entries) -> Int {
+    return 4 - eq(entries.e1_read, 0) - eq(entries.e2_read, 0)
+        - eq(entries.e3_read, 0) - eq(entries.e4_read, 0)
+}
+
+# The key a call is stored and found under: its arguments, masked by the
+# key its cache declared. This is the whole of key derivation, and the
+# reason a key that omits an argument leaks: two calls that differ only in
+# that argument compute the same key.
+fn key_id(declared: Cache, call: Call) -> Int {
+    return has(declared.key, arg_id()) * call.id
+}
+
+fn key_caller(declared: Cache, call: Call) -> Int {
+    return has(declared.key, arg_caller()) * call.caller
+}
+
+fn matches(entries: Entries, slot: Int, call: Call) -> Int {
+    let declared: Cache = cache_of(call.op)
+    return eq(entry_read(entries, slot), call.op)
+        * eq(entry_id(entries, slot), key_id(declared, call))
+        * eq(entry_caller(entries, slot), key_caller(declared, call))
+}
+
+# The slot holding this call's key, or 0.
+fn found(entries: Entries, call: Call) -> Int {
+    if matches(entries, 1, call) == 1 {
+        return 1
+    }
+    if matches(entries, 2, call) == 1 {
+        return 2
+    }
+    if matches(entries, 3, call) == 1 {
+        return 3
+    }
+    if matches(entries, 4, call) == 1 {
+        return 4
+    }
+    return 0
+}
+
+fn alive(declared: Cache, stored_at: Int, now: Int) -> Int {
+    if declared.lifetime == lifetime_forever() {
+        return 1
+    }
+    if now - stored_at < declared.lifetime {
+        return 1
+    }
+    return 0
+}
+
+# Where a miss is stored: the first empty slot, or, when all four are live,
+# the one stored longest ago.
+fn victim(entries: Entries) -> Int {
+    if entries.e1_read == 0 {
+        return 1
+    }
+    if entries.e2_read == 0 {
+        return 2
+    }
+    if entries.e3_read == 0 {
+        return 3
+    }
+    if entries.e4_read == 0 {
+        return 4
+    }
+    let mut slot = 1
+    let mut at = entries.e1_at
+    if entries.e2_at < at {
+        slot = 2
+        at = entries.e2_at
+    }
+    if entries.e3_at < at {
+        slot = 3
+        at = entries.e3_at
+    }
+    if entries.e4_at < at {
+        slot = 4
+    }
+    return slot
+}
+
+# Whether a write drops the entry in one slot. A shared unscoped tag drops
+# it. A shared scoped tag drops it when its key names the written row, or
+# names no row, because such an entry could hold anything about any row.
+fn dropped_at(entries: Entries, slot: Int, call: Call) -> Int {
+    let read: Int = entry_read(entries, slot)
+    if read == 0 {
+        return 0
+    }
+    let declared: Cache = cache_of(read)
+    let written: Write = write_of(call.op)
+    if has(declared.tags, tag_things()) * has(written.invalidates, tag_things()) == 1 {
+        return 1
+    }
+    if has(declared.tags, tag_thing()) * has(written.invalidates, tag_thing()) == 1 {
+        let keyed: Int = entry_id(entries, slot)
+        if keyed == 0 {
+            return 1
+        }
+        return eq(keyed, call.id)
+    }
+    return 0
+}
+
+fn dropped_by(entries: Entries, call: Call) -> Int {
+    return dropped_at(entries, 1, call) + dropped_at(entries, 2, call)
+        + dropped_at(entries, 3, call) + dropped_at(entries, 4, call)
+}
+
+# How many live entries this call removed: what a write invalidated, or the
+# entry a miss evicted to make room.
+fn removed(entries: Entries, call: Call) -> Int {
+    if is_read(call.op) == 0 {
+        return dropped_by(entries, call)
+    }
+    if found(entries, call) > 0 {
+        return 0
+    }
+    return eq(live_entries(entries), capacity())
+}
+
+# The entries with the slots a write dropped emptied.
+fn without(entries: Entries, call: Call) -> Entries {
+    let k1: Int = 1 - dropped_at(entries, 1, call)
+    let k2: Int = 1 - dropped_at(entries, 2, call)
+    let k3: Int = 1 - dropped_at(entries, 3, call)
+    let k4: Int = 1 - dropped_at(entries, 4, call)
+    let kept: Entries = Entries(
+        e1_read: k1 * entries.e1_read,
+        e1_id: k1 * entries.e1_id,
+        e1_caller: k1 * entries.e1_caller,
+        e1_value: k1 * entries.e1_value,
+        e1_at: k1 * entries.e1_at,
+        e2_read: k2 * entries.e2_read,
+        e2_id: k2 * entries.e2_id,
+        e2_caller: k2 * entries.e2_caller,
+        e2_value: k2 * entries.e2_value,
+        e2_at: k2 * entries.e2_at,
+        e3_read: k3 * entries.e3_read,
+        e3_id: k3 * entries.e3_id,
+        e3_caller: k3 * entries.e3_caller,
+        e3_value: k3 * entries.e3_value,
+        e3_at: k3 * entries.e3_at,
+        e4_read: k4 * entries.e4_read,
+        e4_id: k4 * entries.e4_id,
+        e4_caller: k4 * entries.e4_caller,
+        e4_value: k4 * entries.e4_value,
+        e4_at: k4 * entries.e4_at
+    )
+    return kept
+}
+
+# The entries with one slot holding this call's key and value, stored now.
+fn stored(entries: Entries, slot: Int, call: Call, value: Int) -> Entries {
+    let declared: Cache = cache_of(call.op)
+    let id: Int = key_id(declared, call)
+    let caller: Int = key_caller(declared, call)
+    let s1: Int = eq(slot, 1)
+    let s2: Int = eq(slot, 2)
+    let s3: Int = eq(slot, 3)
+    let s4: Int = eq(slot, 4)
+    let written: Entries = Entries(
+        e1_read: entries.e1_read + s1 * (call.op - entries.e1_read),
+        e1_id: entries.e1_id + s1 * (id - entries.e1_id),
+        e1_caller: entries.e1_caller + s1 * (caller - entries.e1_caller),
+        e1_value: entries.e1_value + s1 * (value - entries.e1_value),
+        e1_at: entries.e1_at + s1 * (call.now - entries.e1_at),
+        e2_read: entries.e2_read + s2 * (call.op - entries.e2_read),
+        e2_id: entries.e2_id + s2 * (id - entries.e2_id),
+        e2_caller: entries.e2_caller + s2 * (caller - entries.e2_caller),
+        e2_value: entries.e2_value + s2 * (value - entries.e2_value),
+        e2_at: entries.e2_at + s2 * (call.now - entries.e2_at),
+        e3_read: entries.e3_read + s3 * (call.op - entries.e3_read),
+        e3_id: entries.e3_id + s3 * (id - entries.e3_id),
+        e3_caller: entries.e3_caller + s3 * (caller - entries.e3_caller),
+        e3_value: entries.e3_value + s3 * (value - entries.e3_value),
+        e3_at: entries.e3_at + s3 * (call.now - entries.e3_at),
+        e4_read: entries.e4_read + s4 * (call.op - entries.e4_read),
+        e4_id: entries.e4_id + s4 * (id - entries.e4_id),
+        e4_caller: entries.e4_caller + s4 * (caller - entries.e4_caller),
+        e4_value: entries.e4_value + s4 * (value - entries.e4_value),
+        e4_at: entries.e4_at + s4 * (call.now - entries.e4_at)
+    )
+    return written
+}
+
+# ------------------------------------------------------------------ a step
+
+# What a call did to the cache, read from the entries before it.
+fn event_of(entries: Entries, things: Things, call: Call) -> CacheEvent {
+    if is_read(call.op) == 0 {
+        return Invalidated(dropped_by(entries, call))
+    }
+    let slot: Int = found(entries, call)
+    if slot == 0 {
+        return Miss(fresh(things, call))
+    }
+    let declared: Cache = cache_of(call.op)
+    if alive(declared, entry_at(entries, slot), call.now) == 0 {
+        return Expired(fresh(things, call))
+    }
+    return Hit(entry_value(entries, slot))
+}
+
+# The entries after a call. A hit changes nothing; an expired entry is
+# refreshed in place; a miss takes the victim slot; a write drops what its
+# tags name.
+fn entries_after(entries: Entries, things: Things, call: Call) -> Entries {
+    if is_read(call.op) == 0 {
+        return without(entries, call)
+    }
+    let slot: Int = found(entries, call)
+    if slot == 0 {
+        return stored(entries, victim(entries), call, fresh(things, call))
+    }
+    let declared: Cache = cache_of(call.op)
+    if alive(declared, entry_at(entries, slot), call.now) == 0 {
+        return stored(entries, slot, call, fresh(things, call))
+    }
+    return entries
+}
+
+fn event_kind(event: CacheEvent) -> Int {
+    let mut kind = 0
+    match event {
+        Miss(_) => { kind = event_miss() },
+        Hit(_) => { kind = event_hit() },
+        Expired(_) => { kind = event_expired() },
+        Invalidated(_) => { kind = event_invalidated() },
+    }
+    return kind
+}
+
+fn event_payload(event: CacheEvent) -> Int {
+    let mut payload = 0
+    match event {
+        Miss(value) => { payload = value },
+        Hit(value) => { payload = value },
+        Expired(value) => { payload = value },
+        Invalidated(dropped) => { payload = dropped },
+    }
+    return payload
+}
+
+# ------------------------------------------------------------ the session
+
+fn session_length() -> Int {
+    return 23
+}
+
+# The recorded session, one call per step. The comments say what each step
+# is there to show; tests/cache/check.sh holds the trace to them.
+fn session_call(number: Int) -> Call {
+    # Fill: a miss, then a hit on the same key.
+    if number == 1 {
+        return call_of(op_list(), 0, 0, 0, 0)
+    }
+    if number == 2 {
+        return call_of(op_show(), 1, 0, 0, 1)
+    }
+    if number == 3 {
+        return call_of(op_show(), 1, 0, 0, 2)
+    }
+    # The same row for two callers is two entries with two answers.
+    if number == 4 {
+        return call_of(op_mine(), 1, 0, 7, 3)
+    }
+    if number == 5 {
+        return call_of(op_mine(), 1, 0, 9, 4)
+    }
+    if number == 6 {
+        return call_of(op_list(), 0, 0, 0, 5)
+    }
+    # A put drops everything about the collection and about row 1.
+    if number == 7 {
+        return call_of(op_put(), 1, 15, 0, 6)
+    }
+    if number == 8 {
+        return call_of(op_show(), 1, 0, 0, 7)
+    }
+    if number == 9 {
+        return call_of(op_list(), 0, 0, 0, 8)
+    }
+    if number == 10 {
+        return call_of(op_mine(), 1, 0, 9, 9)
+    }
+    # Giving row 1 away drops row 1's entries and keeps the collection,
+    # whose sum it did not change.
+    if number == 11 {
+        return call_of(op_give(), 1, 0, 9, 10)
+    }
+    if number == 12 {
+        return call_of(op_list(), 0, 0, 0, 11)
+    }
+    if number == 13 {
+        return call_of(op_mine(), 1, 0, 9, 12)
+    }
+    if number == 14 {
+        return call_of(op_mine(), 1, 0, 7, 13)
+    }
+    # Thirty seconds after it was stored, the caller's entry has expired.
+    if number == 15 {
+        return call_of(op_mine(), 1, 0, 9, 42)
+    }
+    # Fill the four slots, then evict the oldest twice.
+    if number == 16 {
+        return call_of(op_show(), 2, 0, 0, 43)
+    }
+    if number == 17 {
+        return call_of(op_show(), 3, 0, 0, 44)
+    }
+    if number == 18 {
+        return call_of(op_list(), 0, 0, 0, 45)
+    }
+    # A cache with no lifetime is still a hit long after; the collection
+    # is not.
+    if number == 19 {
+        return call_of(op_show(), 2, 0, 0, 200)
+    }
+    if number == 20 {
+        return call_of(op_list(), 0, 0, 0, 201)
+    }
+    # A put to row 3 drops row 3 and the collection, and keeps row 2.
+    if number == 21 {
+        return call_of(op_put(), 3, 35, 0, 202)
+    }
+    if number == 22 {
+        return call_of(op_show(), 2, 0, 0, 203)
+    }
+    return call_of(op_list(), 0, 0, 0, 204)
+}

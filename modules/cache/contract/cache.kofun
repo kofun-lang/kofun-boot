@@ -1,0 +1,70 @@
+# The canonical contract of the cache bounded context.
+#
+# This surface is deliberately richer than the executable Stage 2 seed in
+# ../core/cache.kofun: a key is the list of the handler's parameters, a tag
+# is a name with an optional scope, and a lifetime is a sum. The seed
+# projects the same decisions into bit masks and four fixed entry slots.
+# tests/cache/check.sh pins the correspondence of both outcome sums.
+#
+# The decisions, argued in docs/adr/0011-a-cache-key-is-the-arguments.md:
+#
+#   The key is derived, not written. A read handler is pure, so its
+#   parameters are all of its inputs, and a key built from them cannot miss
+#   one. A declared key that omits a parameter, or names one the handler
+#   does not take, is refused at build time, naming the parameter.
+#
+#   Staleness is declared. A cache either has a finite lifetime, or every
+#   tag it carries is invalidated by some declared write. A cache that never
+#   expires under a tag nothing drops is refused, naming the tag.
+#
+#   Read your writes. A write this binary performs never leaves an entry it
+#   changed to be served by this binary, whatever the entry's lifetime; the
+#   gate holds every served value to the uncached answer.
+
+let CACHE_CONTRACT_VERSION = 1
+
+type Lifetime =
+    | Forever
+    | Seconds(seconds: Int)
+
+# A tag scoped by a parameter names one value of it: `thing(id)` is the
+# entry for one row, and a write to that row drops only it.
+type Tag = {
+    name: Text,
+    scope: Option[Text],
+}
+
+# Declared on a read endpoint. The key is the handler's parameter list.
+type Cache = {
+    key: List[Text],
+    lifetime: Lifetime,
+    tags: List[Tag],
+}
+
+# Carried by a write Cmd: the tags it changes.
+type Invalidates = {
+    tags: List[Tag],
+}
+
+type CacheCheck =
+    | Sound(read: Int)
+    | KeyOmits(argument: Int)
+    | KeyForeign(argument: Int)
+    | Uninvalidated(tag: Int)
+    | NeverRefreshed(read: Int)
+
+type CacheEvent =
+    | Miss(value: Int)
+    | Hit(value: Int)
+    | Expired(value: Int)
+    | Invalidated(dropped: Int)
+
+# The build-time check: the declared key against the handler's parameters,
+# then the lifetime and tags against every write's invalidations.
+fn cache_check(
+    declared: Cache,
+    parameters: List[Text],
+    writes: List[Invalidates]
+) -> CacheCheck {
+    ...
+}

@@ -38,6 +38,7 @@ cd ../my-app && sh tests/check.sh      # its own gate: boundary, suite, golden, 
 | `sh scripts/dev.sh --db-plan` | the next migration steps, as source to append; no prompts, no policies filled in |
 | `sh scripts/dev.sh --db-check` | drift, refusals, regeneration, and projections, without the break tests |
 | `sh scripts/dev.sh --shapes` | the SQL the loader's declared shapes compile to |
+| `sh scripts/dev.sh --caches` | the declared caches as manifest rows: key, lifetime, tags, and the HTTP rule each implies |
 | `sh scripts/dev.sh --scaffold` | generate a project and run its gate |
 | `sh scripts/dev.sh --replay` | replay the recorded session trace |
 | `sh scripts/dev.sh --release` | verify the release is coherent; tag nothing |
@@ -375,15 +376,52 @@ loader-postgres: statements counted by the server for N = 1 2 3 4: join 1 1 1 1;
 
 All three answer exactly as the seed does at every N.
 
+### Declared caches — the key is the handler's arguments
+
+`modules/cache/` declares a cache on each read endpoint: a key, a lifetime,
+and tags. Each write declares the tags it invalidates. See
+[ADR 11](docs/adr/0011-a-cache-key-is-the-arguments.md).
+
+Next.js 16 infers a cache key from what the cached function reads. Its
+2026-09-30 advisories include a cache shared across root param values. A
+kofun-boot handler is pure, so its arguments are all of its inputs, and the
+build-time check refuses a key that is not exactly those arguments:
+
+```
+cache.mine is refused by the build-time check: its key omits argument caller
+```
+
+A cache that never expires must carry tags, and every one of them must be
+dropped by some write. `contracts/caches.txt` is the manifest an operator
+reads:
+
+```
+cache.list  key ()              lifetime 60s      tags things          http public, max-age=60
+cache.show  key (id)            lifetime forever  tags thing(id)       http public, no-cache
+cache.mine  key (id, caller)    lifetime 30s      tags thing(id)       http private, max-age=30
+write.put   invalidates things thing(id)
+write.give  invalidates thing(id)
+```
+
+`tests/cache/check.sh` replays a session of 23 calls through the in-memory
+adapter, with misses, hits, expiries, scoped invalidations, and evictions. It
+requires every served value to equal the uncached read. A write that forgets
+to drop what it changed passes the build-time check when another write still
+covers the tag, and the trace names it:
+
+```
+step 13: mine (id 1, caller 9) was a hit that served 0, but the read returns 15 uncached
+```
+
 ## Testing, which is most of the reason to pick a framework
 
 **Unit tests need no server.** kotest pairs module-owned tests with their
-core, so tests call the core directly. Ninety-nine of them run across five
-modules. Assertions accumulate rather than abort, so a broken change reports
+core, so tests call the core directly. A hundred and thirty-nine of them run
+in seven suites across six modules. Assertions accumulate rather than abort, so a broken change reports
 everything that is wrong at once instead of the first thing.
 
 ```
-Tests  99 passed (99 total, 5 suites)
+Tests  139 passed (139 total, 7 suites)
 ```
 
 **The database is real where it has to be, and nowhere else.** Business rules,
@@ -433,7 +471,8 @@ number quoted; hand-editing the OpenAPI document fails with the diff.
 | `modules/effects/` | Cmd/Sub/Msg boundary and trace v1: canonical contracts, Stage 2 replay core, shell, fixtures, unit suite |
 | `modules/schema/` | schema bounded context: key identity, migrations as a fold, drift, planner, golden |
 | `modules/loader/` | loader bounded context: round coalescing and the N+1 measurement, golden |
-| `contracts/` | generated/projected public artifacts: OpenAPI, typed client, replay trace, DDL, migration SQL |
+| `modules/cache/` | cache bounded context: declared keys, lifetimes, and tags; the build-time check; a replayed session, golden |
+| `contracts/` | generated/projected public artifacts: OpenAPI, typed client, replay trace, DDL, migration SQL, shape SQL, cache manifest |
 | `scripts/` | developer loop, module gate/test adapter, build and projection commands |
 | `tests/architecture/` | data-driven module ownership and contract-only dependency gate, tested both ways |
 | `tests/client/` | one call that must compile, two that must not |
@@ -442,6 +481,7 @@ number quoted; hand-editing the OpenAPI document fails with the diff.
 | `tests/schema/postgres.sh` | both SQL projections build the same PostgreSQL database |
 | `tests/loader/check.sh` | statements independent of N, coalescing, shape compilation, break tests |
 | `tests/loader/postgres.sh` | the server's own statement log: shapes cost the same at every N, per-row costs N + 1 |
+| `tests/cache/check.sh` | keys against handler signatures, the build-time check, served equals uncached, break tests |
 | `tests/lib/postgres.sh` | the throwaway PostgreSQL cluster both real-database checks share |
 | `tests/integration/serve.sh` | a real server on a real socket |
 | `tests/scaffold/check.sh` | `boot new`'s output, generated and gated every run |

@@ -75,14 +75,16 @@ gate は次のことを確かめる。
   - closed business outcome seed
   - schema の値と、fold としての migration history（`modules/schema`）
   - round の合流と、N に依存しない文数の gate（`modules/loader`）
+  - 宣言 shape の compile と、PostgreSQL の log で数えた文数
+  - 二つの table、key を名指す外部 key、型変更、DB の schema digest
+  - `Principal` と admission（`modules/router`）
+  - 宣言 cache（`modules/cache`）
 - **調査・設計段階のもの:** 次のものは、すべてが実装済みという意味ではない。各文書の
   adopt/adapt/defer と、ROADMAP の issue を参照すること。
   - Outbox / Inbox
   - module 別の database schema
   - event sourcing
   - 型付き query
-  - 宣言 cache
-  - `Principal`
 - 調査環境の network policy で、一部の公式サイトには届かなかった。その場合は、
   同じ文書の GitHub 上の source を読み、その URL を併記した。GitHub にも一次資料が
   無かった主張（Next.js blog、jOOQ blog、Sigma）は、第三者の mirror か会議の

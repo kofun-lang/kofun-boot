@@ -44,6 +44,7 @@ docs/adr/0007-a-full-resource-is-a-conflict-not-a-storage-failure.md
 docs/adr/0008-a-column-is-its-key.md
 docs/adr/0009-a-migration-history-is-a-fold.md
 docs/adr/0010-a-round-is-a-value.md
+docs/adr/0011-a-cache-key-is-the-arguments.md
 '
 
 # Files under those directories that are deliberately not packed, one per

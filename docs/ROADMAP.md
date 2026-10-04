@@ -72,21 +72,23 @@ Filed 2026-10-04 from [`docs/architecture/BLUEPRINT.md`](architecture/BLUEPRINT.
 
 - [#45](https://github.com/kofun-lang/kofun-boot/issues/45) data: the schema is a value — key identity, migrations as a fold, drift without a database *(landed with this design)*
 - [#46](https://github.com/kofun-lang/kofun-boot/issues/46) data: N+1 as a measurement — a round is a value *(landed with this design)*
-- [#47](https://github.com/kofun-lang/kofun-boot/issues/47) data: more than one table, and foreign keys that name a key
-- [#48](https://github.com/kofun-lang/kofun-boot/issues/48) data: column kind changes — widening applies, narrowing needs Discard
-- [#49](https://github.com/kofun-lang/kofun-boot/issues/49) data: declared shapes compile to a fixed number of statements
-- [#51](https://github.com/kofun-lang/kofun-boot/issues/51) data/capabilities: the database carries its schema digest
-- [#52](https://github.com/kofun-lang/kofun-boot/issues/52) data/governance: released migration history is append-only
-- [#54](https://github.com/kofun-lang/kofun-boot/issues/54) capabilities: `Principal` — authorization is a value, never a layer
+- [#47](https://github.com/kofun-lang/kofun-boot/issues/47) data: more than one table, and foreign keys that name a key *(landed)*
+- [#48](https://github.com/kofun-lang/kofun-boot/issues/48) data: column kind changes — widening applies, narrowing needs Discard *(landed)*
+- [#49](https://github.com/kofun-lang/kofun-boot/issues/49) data: declared shapes compile to a fixed number of statements *(landed)*
+- [#51](https://github.com/kofun-lang/kofun-boot/issues/51) data/capabilities: the database carries its schema digest *(landed)*
+- [#52](https://github.com/kofun-lang/kofun-boot/issues/52) data/governance: released migration history is append-only *(landed)*
+- [#54](https://github.com/kofun-lang/kofun-boot/issues/54) capabilities: `Principal` — authorization is a value, never a layer *(landed; the socket header rule is [#61](https://github.com/kofun-lang/kofun-boot/issues/61))*
 - [#55](https://github.com/kofun-lang/kofun-boot/issues/55) contract: wire codecs generated from closed sums
-- [#56](https://github.com/kofun-lang/kofun-boot/issues/56) serve/effects: declared caches
-- [#57](https://github.com/kofun-lang/kofun-boot/issues/57) cli: `boot db plan / check / sql`
-- [#58](https://github.com/kofun-lang/kofun-boot/issues/58) research: the pack includes the 2026-10 dossiers
+- [#56](https://github.com/kofun-lang/kofun-boot/issues/56) serve/effects: declared caches *(landed)*
+- [#57](https://github.com/kofun-lang/kofun-boot/issues/57) cli: `boot db plan / check / sql` *(landed; scaffolding a schema is [#60](https://github.com/kofun-lang/kofun-boot/issues/60))*
+- [#58](https://github.com/kofun-lang/kofun-boot/issues/58) research: the pack includes the 2026-10 dossiers *(landed)*
+- [#60](https://github.com/kofun-lang/kofun-boot/issues/60) cli: `boot new` scaffolds a schema module, and its gate runs `boot db check` *(split from #57)*
 
 Blocked on a filed dependency, not on refinement:
 
 - [#50](https://github.com/kofun-lang/kofun-boot/issues/50) data: typed query values and row codecs — blocked on List/Text lowering
 - [#53](https://github.com/kofun-lang/kofun-boot/issues/53) data: data migrations and backfills as `Cmd` values — blocked on [#50](https://github.com/kofun-lang/kofun-boot/issues/50)
+- [#61](https://github.com/kofun-lang/kofun-boot/issues/61) serve/capabilities: no request header can set framework state, checked at the socket — blocked by [#2](https://github.com/kofun-lang/kofun-boot/issues/2) *(split from #54)*
 
 - [#32](https://github.com/kofun-lang/kofun-boot/issues/32) replay: the trace format is the `Cmd`/`Msg` sequence — blocked by [#31](https://github.com/kofun-lang/kofun-boot/issues/31)
 

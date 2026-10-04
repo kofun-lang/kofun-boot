@@ -309,11 +309,27 @@ compiler が cache key を **推測** すると、入力を一つ見落とした
   構成上欠けがない。
 - 読み取りの cache は endpoint 値に **宣言** する。宣言するのは key、寿命、tag の三つ。
 - 書き込みの `Cmd` は、自分が無効化する tag を宣言する。
-- build 時に二つを検査する。
-  - 読まれる tag には、無効化する書き込みか寿命のどちらかが必ずある
+- build 時に次を検査する。
+  - key は handler の引数と過不足なく一致する。欠けていれば `KeyOmits`、
+    余分があれば `KeyForeign` として、引数を名指しして拒否する
+  - 期限の無い cache は tag を持ち、その tag はどれかの書き込みが無効化する。
+    そうでなければ `NeverRefreshed` または `Uninvalidated` として、tag を名指しして拒否する
   - 宣言された cache は manifest に印字される
+- 実行時の規則は read your writes である。この binary の書き込みが変えた entry を、
+  この binary が返すことはない。
 
-**状態。** [#56](https://github.com/kofun-lang/kofun-boot/issues/56)（設計のみ）。
+**状態。** 成立している（[#56](https://github.com/kofun-lang/kofun-boot/issues/56)、
+[ADR 11](../adr/0011-a-cache-key-is-the-arguments.md)）。
+
+- `modules/cache` は三つの読み取りと二つの書き込みを持つ。
+- gate は二つのことを確かめる。
+  - handler の signature を source から読み、宣言された引数と照合する
+  - 23 呼び出しの session で、返した値がすべて cache なしの読み取りと等しい
+- `contracts/caches.txt` が manifest の行である。key に caller を含む cache は
+  HTTP では `private`、期限の無い cache は `no-cache` になる。
+- 共有 backend と、合成された capability manifest への行の追加は、
+  合成の lane（[#2](https://github.com/kofun-lang/kofun-boot/issues/2)、
+  [#17](https://github.com/kofun-lang/kofun-boot/issues/17)）で行う。
 
 ## 7. 描画 — RSC の代わりに、view を ADT にする
 
@@ -378,12 +394,12 @@ Spring Boot 4 は auto-configuration を技術ごとの小さな module に分�
 
 | 段 | 何を見るか | 道具 | 状態 |
 |---|---|---|---|
-| core | 純粋関数（業務ルール、合流、planner） | kotest、99 test、約 20 秒 | 成立 |
+| core | 純粋関数（業務ルール、合流、planner、cache の検査） | kotest、7 suite で 139 test | 成立 |
 | seed | binary の出力を section ごとに名前付きで読む | `tests/*/check.sh` | 成立 |
 | 投影 | 生成物が手で編集されていない | 同上 | 成立 |
 | real socket | HTTP/1.1、keep-alive、SIGTERM drain | `tests/integration/serve.sh` | 成立 |
-| real DB | 二つの SQL が同じ PostgreSQL を作る | `tests/schema/postgres.sh` | 成立 |
-| replay | 記録した trace が byte 単位で再生される | `scripts/trace.sh` | 成立 |
+| real DB | 二つの SQL が同じ PostgreSQL を作る。宣言 shape の文数を server の log で数える | `tests/schema/postgres.sh`、`tests/loader/postgres.sh` | 成立 |
+| replay | 記録した trace が byte 単位で再生される。cache の hit と miss も含む | `scripts/trace.sh`、`tests/cache/check.sh` | 成立 |
 
 Spring の Testcontainers（`@ServiceConnection`）が解くのは「本物の DB を test に配線する」問題である。
 kofun-boot では DB は capability なので、配線は record の field を一つ変えるだけで済む。
@@ -398,7 +414,7 @@ kofun-boot では DB は capability なので、配線は record の field を�
 | `boot dev` | `next dev` | 成立（`--watch`） |
 | `boot openapi` / `boot gen client` | — | 成立 |
 | `boot db sql`（`dev.sh --schema`） | `prisma migrate diff`、`drizzle-kit generate` | 成立（投影の印字） |
-| `boot db plan` / `boot db check` | `prisma migrate dev --create-only`、`drizzle-kit check` | [#57](https://github.com/kofun-lang/kofun-boot/issues/57) |
+| `boot db plan` / `boot db check`（`dev.sh --db-plan`、`--db-check`） | `prisma migrate dev --create-only`、`drizzle-kit check` | 成立（[#57](https://github.com/kofun-lang/kofun-boot/issues/57)。質問はせず、policy も埋めない） |
 | `boot explain` | Spring の conditions report | R2 #17 |
 | `boot mock` | json-server | #34 |
 
@@ -421,23 +437,27 @@ kofun-boot では DB は capability なので、配線は record の field を�
 |---|---|---|
 | `modules/schema` | 次のことを、Stage 2 の固定 slot で両 backend・byte 一致で示した。<br>・key による同定<br>・退役 key<br>・fold としての history<br>・DB 無しの drift<br>・key による planner<br>・policy の強制 | `tests/schema/check.sh`、`tests/schema/postgres.sh` |
 | `modules/loader` | 次のことを示した。<br>・round の合流（source ごとに一文、key は一度だけ）<br>・三つの strategy が同じ答えを返す<br>・N 非依存の文数<br>・N+1 の名指し | `tests/loader/check.sh` |
+| `modules/schema`（続き） | 二つの table、key を名指す外部 key、型変更、DB の schema digest、release 済み history の固定、`boot db plan / check / sql` | `tests/schema/check.sh`、`tests/schema/postgres.sh`、`tests/release/check.sh` |
+| `modules/loader`（続き） | 宣言 shape の compile（`LATERAL` の無い dialect では名指しで拒否）と、PostgreSQL の log で数えた文数 | `tests/loader/check.sh`、`tests/loader/postgres.sh` |
+| `modules/router`（続き） | `Principal` と、dispatch の四段目としての admission | `tests/boot/check.sh`、`tests/architecture/check.sh` |
+| `modules/cache` | key と handler の引数の一致、宣言された寿命と tag、書き込みによる無効化、cache なしの読み取りと等しい値 | `tests/cache/check.sh` |
 
 ## 残りの道筋
 
-今回実装した二つは [#45](https://github.com/kofun-lang/kofun-boot/issues/45) と [#46](https://github.com/kofun-lang/kofun-boot/issues/46) である。
+最初に実装した二つは [#45](https://github.com/kofun-lang/kofun-boot/issues/45) と [#46](https://github.com/kofun-lang/kofun-boot/issues/46) である。
 続きは issue として登録し、[`ROADMAP.md`](../ROADMAP.md) にも並べた。
 
-| issue | 内容 | lane |
-|---|---|---|
-| [#47](https://github.com/kofun-lang/kofun-boot/issues/47) | 複数 table と、key を名指す外部 key | L7 |
-| [#48](https://github.com/kofun-lang/kofun-boot/issues/48) | 型変更の migration（拡大は可、縮小は `Discard` が必要） | L7 |
-| [#49](https://github.com/kofun-lang/kofun-boot/issues/49) | 宣言 shape を `LATERAL` + `json_agg` か、階層ごとの `IN` に compile する | L7 |
-| [#50](https://github.com/kofun-lang/kofun-boot/issues/50) | 型付き query 値と row codec、selection からの結果型（List/Text lowering 待ち） | L7 |
-| [#51](https://github.com/kofun-lang/kofun-boot/issues/51) | DB が schema digest を持ち、binary が起動時に照合する | L7/L3 |
-| [#52](https://github.com/kofun-lang/kofun-boot/issues/52) | release 済み history を追記専用にする（tag ごとに固定） | L7/L0 |
-| [#53](https://github.com/kofun-lang/kofun-boot/issues/53) | data migration と backfill を `Cmd` 値にする | L7 |
-| [#54](https://github.com/kofun-lang/kofun-boot/issues/54) | `Principal`: 認可は handler が受け取る値にする | L3 |
-| [#55](https://github.com/kofun-lang/kofun-boot/issues/55) | 閉じた和から生成する wire codec。汎用 deserializer は持たない | L1 |
-| [#56](https://github.com/kofun-lang/kofun-boot/issues/56) | 宣言 cache（key は引数から作る。寿命と tag を宣言する） | L2/L11 |
-| [#57](https://github.com/kofun-lang/kofun-boot/issues/57) | `boot db plan / check / sql` | L8 |
-| [#58](https://github.com/kofun-lang/kofun-boot/issues/58) | research pack に 2026-10 の文書を入れ、日付を更新する | R0/L10 |
+| issue | 内容 | lane | 状態 |
+|---|---|---|---|
+| [#47](https://github.com/kofun-lang/kofun-boot/issues/47) | 複数 table と、key を名指す外部 key | L7 | 実装済み |
+| [#48](https://github.com/kofun-lang/kofun-boot/issues/48) | 型変更の migration（拡大は可、縮小は `Discard` が必要） | L7 | 実装済み |
+| [#49](https://github.com/kofun-lang/kofun-boot/issues/49) | 宣言 shape を `LATERAL` + `json_agg` か、階層ごとの `IN` に compile する | L7 | 実装済み |
+| [#50](https://github.com/kofun-lang/kofun-boot/issues/50) | 型付き query 値と row codec、selection からの結果型 | L7 | List/Text lowering 待ち |
+| [#51](https://github.com/kofun-lang/kofun-boot/issues/51) | DB が schema digest を持ち、binary が起動時に照合する | L7/L3 | 実装済み |
+| [#52](https://github.com/kofun-lang/kofun-boot/issues/52) | release 済み history を追記専用にする（tag ごとに固定） | L7/L0 | 実装済み |
+| [#53](https://github.com/kofun-lang/kofun-boot/issues/53) | data migration と backfill を `Cmd` 値にする | L7 | #50 待ち |
+| [#54](https://github.com/kofun-lang/kofun-boot/issues/54) | `Principal`: 認可は handler が受け取る値にする | L3 | 実装済み（socket 層は [#61](https://github.com/kofun-lang/kofun-boot/issues/61)） |
+| [#55](https://github.com/kofun-lang/kofun-boot/issues/55) | 閉じた和から生成する wire codec。汎用 deserializer は持たない | L1 | 未着手 |
+| [#56](https://github.com/kofun-lang/kofun-boot/issues/56) | 宣言 cache（key は引数から作る。寿命と tag を宣言する） | L2/L11 | 実装済み |
+| [#57](https://github.com/kofun-lang/kofun-boot/issues/57) | `boot db plan / check / sql` | L8 | 実装済み（`boot new` の雛形は [#60](https://github.com/kofun-lang/kofun-boot/issues/60)） |
+| [#58](https://github.com/kofun-lang/kofun-boot/issues/58) | research pack に 2026-10 の文書を入れ、日付を更新する | R0/L10 | 実装済み |

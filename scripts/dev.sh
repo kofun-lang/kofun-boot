@@ -18,6 +18,7 @@ set -eu
 #   scripts/dev.sh --db-plan  print the next history steps as source: boot db plan
 #   scripts/dev.sh --db-check drift, refusals, and projections: boot db check
 #   scripts/dev.sh --shapes   print the SQL the loader's declared shapes compile to
+#   scripts/dev.sh --caches   print the declared caches as manifest rows
 #   scripts/dev.sh --scaffold generate a project and run its gate
 #   scripts/dev.sh --replay   replay the recorded session trace
 #   scripts/dev.sh --bench    measure, or refuse if the machine is busy
@@ -117,6 +118,10 @@ case "${1:-}" in
         binary=$(SEED=loader sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/loader")
         sh "$ROOT/scripts/shape-sql.sh" shapes "$binary"
         ;;
+    --caches)
+        binary=$(SEED=cache sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/cache")
+        sh "$ROOT/scripts/cache-manifest.sh" "$binary"
+        ;;
     --bench)
         shift
         sh "$ROOT/scripts/bench.sh" "${1:-record}"
@@ -147,6 +152,7 @@ case "${1:-}" in
         sh "$ROOT/tests/schema/postgres.sh"
         sh "$ROOT/tests/loader/check.sh"
         sh "$ROOT/tests/loader/postgres.sh"
+        sh "$ROOT/tests/cache/check.sh"
         sh "$ROOT/tests/research/check.sh"
         sh "$ROOT/tests/integration/serve.sh"
         sh "$ROOT/tests/scaffold/check.sh"

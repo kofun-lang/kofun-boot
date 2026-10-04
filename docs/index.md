@@ -61,6 +61,7 @@ The generated project already has the module boundary and its own gate.
 | `sh scripts/dev.sh --openapi` | OpenAPI projected from the route table |
 | `sh scripts/dev.sh --client` | typed TypeScript client projected from the route table |
 | `sh scripts/dev.sh --schema` | DDL and migration SQL projected from the schema |
+| `sh scripts/dev.sh --caches` | declared caches as manifest rows |
 | `sh scripts/dev.sh --replay` | recorded session-trace replay |
 | `sh scripts/dev.sh --research` | deterministic research ZIP and SHA-256 |
 
@@ -87,6 +88,17 @@ is refused until it names a backfill. The planner never supplies either.
 
 `tests/loader/check.sh` runs one request at N = 1 to 4. It refuses the shipped
 strategy if its statement count changes with N.
+
+### Caches
+
+A cache is declared on a read endpoint with a key, a lifetime, and tags. The
+key must be exactly the handler's arguments, and a cache that never expires
+needs every tag dropped by some write.
+
+```sh
+sh scripts/dev.sh --caches          # contracts/caches.txt
+sh tests/cache/check.sh             # the build-time check, the replayed session, break tests
+```
 
 ### Record and replay
 
@@ -150,6 +162,7 @@ only place that builds the capability record and the only place that prints.
 - [ADR 8 — A column is its key](adr/0008-a-column-is-its-key.md)
 - [ADR 9 — A migration history is a fold](adr/0009-a-migration-history-is-a-fold.md)
 - [ADR 10 — A round of fetches is a value](adr/0010-a-round-is-a-value.md)
+- [ADR 11 — A cache key is the handler's arguments](adr/0011-a-cache-key-is-the-arguments.md)
 
 ### Research
 

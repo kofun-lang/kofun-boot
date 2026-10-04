@@ -1,0 +1,188 @@
+# Unit tests for the cache core.
+#
+# The check first, because it is what runs at build time: each refusal on
+# the smallest declaration that earns it. Then the entries, walked call by
+# call, so a test can say what a hit served without a server.
+
+fn kind_of(declared: Cache, args: Int, covered: Int) -> Int {
+    let verdict: CacheCheck = check(declared, args, covered)
+    return check_kind(verdict)
+}
+
+fn payload_of(declared: Cache, args: Int, covered: Int) -> Int {
+    let verdict: CacheCheck = check(declared, args, covered)
+    return check_payload(verdict)
+}
+
+fn read_kind(read: Int) -> Int {
+    let verdict: CacheCheck = check_read(read)
+    return check_kind(verdict)
+}
+
+fn kind_at(entries: Entries, things: Things, call: Call) -> Int {
+    let event: CacheEvent = event_of(entries, things, call)
+    return event_kind(event)
+}
+
+fn served_at(entries: Entries, things: Things, call: Call) -> Int {
+    let event: CacheEvent = event_of(entries, things, call)
+    return event_payload(event)
+}
+
+# The entries after one read on an empty cache.
+fn one_read(call: Call) -> Entries {
+    return entries_after(no_entries(), seeded_things(), call)
+}
+
+# ------------------------------------------------------------- the check
+
+fn test_every_declared_cache_is_sound() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(read_kind(op_list()), check_sound())
+    failures = failures + expect_eq_int(read_kind(op_show()), check_sound())
+    failures = failures + expect_eq_int(read_kind(op_mine()), check_sound())
+    failures = failures + expect_eq_int(covered_tags(), tag_things() + tag_thing())
+    return failures
+}
+
+# The leak, refused before anything runs: a per-caller answer under a key
+# without the caller.
+fn test_a_key_without_the_caller_is_refused_naming_the_caller() -> Int {
+    let declared: Cache = cache(op_mine(), arg_id(), 30, tag_thing())
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(declared, arg_id() + arg_caller(), covered_tags()), check_key_omits())
+    failures = failures + expect_eq_int(payload_of(declared, arg_id() + arg_caller(), covered_tags()), arg_caller())
+    return failures
+}
+
+fn test_a_key_naming_an_argument_the_handler_lacks_is_refused() -> Int {
+    let declared: Cache = cache(op_list(), arg_caller(), 60, tag_things())
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(declared, 0, covered_tags()), check_key_foreign())
+    failures = failures + expect_eq_int(payload_of(declared, 0, covered_tags()), arg_caller())
+    return failures
+}
+
+# The key is checked before the lifetime: a leaking key on a cache that is
+# also never refreshed is reported as the leak.
+fn test_the_key_is_checked_before_the_lifetime() -> Int {
+    let declared: Cache = cache(op_mine(), arg_id(), lifetime_forever(), 0)
+    return expect_eq_int(kind_of(declared, arg_id() + arg_caller(), 0), check_key_omits())
+}
+
+fn test_a_cache_that_never_expires_needs_its_tags_invalidated() -> Int {
+    let declared: Cache = cache(op_show(), arg_id(), lifetime_forever(), tag_thing())
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(declared, arg_id(), tag_things()), check_uninvalidated())
+    failures = failures + expect_eq_int(payload_of(declared, arg_id(), tag_things()), tag_thing())
+    failures = failures + expect_eq_int(kind_of(declared, arg_id(), tag_thing()), check_sound())
+    return failures
+}
+
+fn test_a_cache_that_never_expires_needs_a_tag() -> Int {
+    let declared: Cache = cache(op_show(), arg_id(), lifetime_forever(), 0)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(declared, arg_id(), covered_tags()), check_never_refreshed())
+    failures = failures + expect_eq_int(payload_of(declared, arg_id(), covered_tags()), op_show())
+    return failures
+}
+
+fn test_a_finite_lifetime_bounds_an_uncovered_tag() -> Int {
+    let declared: Cache = cache(op_mine(), arg_id() + arg_caller(), 30, tag_thing())
+    return expect_eq_int(kind_of(declared, arg_id() + arg_caller(), 0), check_sound())
+}
+
+# ------------------------------------------------------------- the keys
+
+# Two callers asking about one row are two entries under the declared key,
+# and one entry under a key that leaves the caller out.
+fn test_a_key_holds_exactly_the_declared_arguments() -> Int {
+    let declared: Cache = cache_of(op_mine())
+    let leaky: Cache = cache(op_mine(), arg_id(), 30, tag_thing())
+    let seven: Call = call_of(op_mine(), 1, 0, 7, 0)
+    let nine: Call = call_of(op_mine(), 1, 0, 9, 0)
+    let mut failures = 0
+    failures = failures + expect_eq_int(key_caller(declared, seven), 7)
+    failures = failures + expect_eq_int(key_caller(declared, nine), 9)
+    failures = failures + expect_eq_int(key_caller(leaky, nine), 0)
+    failures = failures + expect_eq_int(key_id(leaky, nine), 1)
+    return failures
+}
+
+fn test_another_caller_misses_the_first_callers_entry() -> Int {
+    let entries: Entries = one_read(call_of(op_mine(), 1, 0, 7, 0))
+    let other: Call = call_of(op_mine(), 1, 0, 9, 1)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_at(entries, seeded_things(), other), event_miss())
+    failures = failures + expect_eq_int(served_at(entries, seeded_things(), other), 0)
+    return failures
+}
+
+# ------------------------------------------------------------ the entries
+
+fn test_a_hit_serves_what_the_miss_stored() -> Int {
+    let entries: Entries = one_read(call_of(op_show(), 2, 0, 0, 0))
+    let again: Call = call_of(op_show(), 2, 0, 0, 500)
+    let mut failures = 0
+    failures = failures + expect_eq_int(live_entries(entries), 1)
+    failures = failures + expect_eq_int(kind_at(entries, seeded_things(), again), event_hit())
+    failures = failures + expect_eq_int(served_at(entries, seeded_things(), again), 20)
+    return failures
+}
+
+# Expiry is half-open: an entry is alive for lifetime seconds, not one more.
+fn test_an_entry_expires_at_its_lifetime() -> Int {
+    let entries: Entries = one_read(call_of(op_list(), 0, 0, 0, 100))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_at(entries, seeded_things(), call_of(op_list(), 0, 0, 0, 159)), event_hit())
+    failures = failures + expect_eq_int(kind_at(entries, seeded_things(), call_of(op_list(), 0, 0, 0, 160)), event_expired())
+    return failures
+}
+
+# A put to row 3 drops the collection and row 3, and keeps row 2.
+fn test_a_scoped_tag_drops_only_the_written_row() -> Int {
+    let things: Things = seeded_things()
+    let a: Entries = entries_after(no_entries(), things, call_of(op_show(), 2, 0, 0, 0))
+    let b: Entries = entries_after(a, things, call_of(op_show(), 3, 0, 0, 1))
+    let c: Entries = entries_after(b, things, call_of(op_list(), 0, 0, 0, 2))
+    let put: Call = call_of(op_put(), 3, 35, 0, 3)
+    let after: Entries = entries_after(c, things, put)
+    let mut failures = 0
+    failures = failures + expect_eq_int(removed(c, put), 2)
+    failures = failures + expect_eq_int(live_entries(after), 1)
+    failures = failures + expect_eq_int(kind_at(after, things_after(things, put), call_of(op_show(), 2, 0, 0, 4)), event_hit())
+    failures = failures + expect_eq_int(served_at(after, things_after(things, put), call_of(op_show(), 3, 0, 0, 4)), 35)
+    return failures
+}
+
+# Giving a row away changes who may read it, so it drops `thing` and keeps
+# the collection, whose sum it did not change.
+fn test_a_give_keeps_the_collection() -> Int {
+    let things: Things = seeded_things()
+    let a: Entries = entries_after(no_entries(), things, call_of(op_list(), 0, 0, 0, 0))
+    let b: Entries = entries_after(a, things, call_of(op_mine(), 1, 0, 9, 1))
+    let give: Call = call_of(op_give(), 1, 0, 9, 2)
+    let after: Entries = entries_after(b, things, give)
+    let given: Things = things_after(things, give)
+    let mut failures = 0
+    failures = failures + expect_eq_int(removed(b, give), 1)
+    failures = failures + expect_eq_int(kind_at(after, given, call_of(op_list(), 0, 0, 0, 3)), event_hit())
+    failures = failures + expect_eq_int(served_at(after, given, call_of(op_mine(), 1, 0, 9, 3)), 10)
+    return failures
+}
+
+# With four live entries, a miss takes the slot stored longest ago.
+fn test_a_full_cache_evicts_the_oldest_entry() -> Int {
+    let things: Things = seeded_things()
+    let a: Entries = entries_after(no_entries(), things, call_of(op_show(), 1, 0, 0, 5))
+    let b: Entries = entries_after(a, things, call_of(op_show(), 2, 0, 0, 1))
+    let c: Entries = entries_after(b, things, call_of(op_show(), 3, 0, 0, 7))
+    let d: Entries = entries_after(c, things, call_of(op_list(), 0, 0, 0, 8))
+    let miss: Call = call_of(op_mine(), 1, 0, 7, 9)
+    let mut failures = 0
+    failures = failures + expect_eq_int(live_entries(d), capacity())
+    failures = failures + expect_eq_int(victim(d), 2)
+    failures = failures + expect_eq_int(removed(d, miss), 1)
+    failures = failures + expect_eq_int(live_entries(entries_after(d, things, miss)), capacity())
+    return failures
+}

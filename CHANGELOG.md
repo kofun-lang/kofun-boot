@@ -118,6 +118,32 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
     `x-kofun-requires`, and their 401 and 403 answers.
   - The socket-level header rule is split into
     [#61](https://github.com/kofun-lang/kofun-boot/issues/61).
+- **Declared caches: the key is the handler's arguments**
+  ([#56](https://github.com/kofun-lang/kofun-boot/issues/56),
+  [ADR 11](docs/adr/0011-a-cache-key-is-the-arguments.md)).
+  - `modules/cache` declares a cache on each of three read endpoints, with a
+    key, a lifetime, and tags. Two writes declare the tags they invalidate.
+    A tag can be scoped by an argument, so a write to one row drops only that
+    row's entries.
+  - The build-time check refuses, in order: a key that omits an argument the
+    handler takes (`KeyOmits`), a key that names one it does not take
+    (`KeyForeign`), a cache that never expires with no tag
+    (`NeverRefreshed`), and one under a tag no write drops (`Uninvalidated`).
+    Five probes show each verdict.
+  - The in-memory adapter is four slots, folded over a recorded session of
+    23 calls. The trace records each miss, hit, expiry, invalidation, and
+    eviction, and two runs agree byte for byte.
+  - `tests/cache/check.sh` reads each read handler's signature from the
+    source and requires it to match the declared arguments. It requires
+    every served value to equal the uncached read, which catches both a stale
+    entry and a leaked one, naming the step.
+  - `scripts/cache-manifest.sh` projects `contracts/caches.txt`, one row per
+    cache and per write. A key that holds the caller is `private` to HTTP
+    caches, and a cache that never expires is `no-cache`. `scripts/dev.sh
+    --caches` prints it.
+  - Five break tests: a key without the caller, the declared arguments edited
+    to match that key, an uninvalidated tag, a forgotten invalidation that
+    only the trace can see, and a hand-edited manifest.
 - **The database carries its schema digest**
   ([#51](https://github.com/kofun-lang/kofun-boot/issues/51)).
   - `scripts/schema-digest.sh` digests the declared tables, comments stripped.
@@ -204,8 +230,9 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
   - `tests/research/check.sh` discovers the documents from the filesystem. It
     fails, by file name, on one that is neither packed nor excluded with a
     written reason, and it shows that it can fail.
-- **CI runs two more jobs**: the schema gate, and the PostgreSQL check with its
-  SKIP disabled. `scripts/dev.sh --check` runs both and the loader gate.
+- **CI runs four more jobs**: the schema gate, the loader gate, the cache
+  gate, and the PostgreSQL checks with their SKIP disabled.
+  `scripts/dev.sh --check` runs all of them.
 - **L7 is no longer wholly blocked.** Typed queries and row codecs still wait
   on List/Text lowering. Schema, migration, and round decisions fit the
   fixed-slot seed pattern and are now executable.

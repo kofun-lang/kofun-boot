@@ -311,14 +311,21 @@ Spring Boot の基本的な判断はそちらにある。
 - **L7（今回実装、[#46](https://github.com/kofun-lang/kofun-boot/issues/46)）。** round の合流と、N に依存しない文数の gate。
   - `modules/loader`
   - `tests/loader/check.sh`
-- **L7（issue）。**
+- **L7（今回実装）。**
   - 複数 table と外部 key: [#47](https://github.com/kofun-lang/kofun-boot/issues/47)
   - 型変更の migration: [#48](https://github.com/kofun-lang/kofun-boot/issues/48)
-  - 宣言 shape の `LATERAL` compile: [#49](https://github.com/kofun-lang/kofun-boot/issues/49)
-  - 型付き query 値と row codec: [#50](https://github.com/kofun-lang/kofun-boot/issues/50)
+  - 宣言 shape の `LATERAL` compile と、PostgreSQL での文数の照合: [#49](https://github.com/kofun-lang/kofun-boot/issues/49)
   - DB の digest marker: [#51](https://github.com/kofun-lang/kofun-boot/issues/51)
   - release ごとの history 固定: [#52](https://github.com/kofun-lang/kofun-boot/issues/52)
+- **L7（言語の List/Text lowering 待ち）。**
+  - 型付き query 値と row codec: [#50](https://github.com/kofun-lang/kofun-boot/issues/50)
   - data migration: [#53](https://github.com/kofun-lang/kofun-boot/issues/53)
-- **L1 と L3（issue）。** `Principal` capability（[#54](https://github.com/kofun-lang/kofun-boot/issues/54)）と生成 codec（[#55](https://github.com/kofun-lang/kofun-boot/issues/55)）。
-- **L2 と L11（issue）。** 宣言 cache（[#56](https://github.com/kofun-lang/kofun-boot/issues/56)）。
-- **L8（issue）。** `boot db plan / check / sql`（[#57](https://github.com/kofun-lang/kofun-boot/issues/57)）。
+- **L3（今回実装）。** `Principal`（[#54](https://github.com/kofun-lang/kofun-boot/issues/54)）。
+  socket 層の header 規則は [#61](https://github.com/kofun-lang/kofun-boot/issues/61) に分けた。
+- **L1（issue）。** 生成 codec（[#55](https://github.com/kofun-lang/kofun-boot/issues/55)）。
+- **L2 と L11（今回実装）。** 宣言 cache（[#56](https://github.com/kofun-lang/kofun-boot/issues/56)、
+  [ADR 11](../adr/0011-a-cache-key-is-the-arguments.md)）。
+  - `modules/cache`
+  - `tests/cache/check.sh`
+- **L8（今回実装）。** `boot db plan / check / sql`（[#57](https://github.com/kofun-lang/kofun-boot/issues/57)）。
+  `boot new` への schema の雛形は [#60](https://github.com/kofun-lang/kofun-boot/issues/60) に分けた。
