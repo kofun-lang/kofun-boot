@@ -69,7 +69,9 @@ and compares the bytes.
 ## Stamp
 
 The series was written on 2026-08-02. `NEXT_PRISMA_DRIZZLE.md` and
-`N_PLUS_ONE.md` were added on 2026-10-04 and are not yet in the research pack
-([#58](https://github.com/kofun-lang/kofun-boot/issues/58)). Each dossier owns its source and version
+`N_PLUS_ONE.md` were added on 2026-10-04. The research pack is stamped
+2026-10-04 and carries every dossier, ADR, and architecture document;
+`tests/research/check.sh` fails on one that is neither packed nor excluded by
+name ([#58](https://github.com/kofun-lang/kofun-boot/issues/58)). Each dossier owns its source and version
 stamp; the generated pack owns a content manifest instead of claiming one Git
 commit for independently refreshed documents.

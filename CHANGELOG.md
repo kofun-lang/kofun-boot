@@ -96,6 +96,14 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
 
 ### Changed
 
+- **The research pack is stamped 2026-10-04 and carries every dossier, ADR,
+  and architecture document**
+  ([#58](https://github.com/kofun-lang/kofun-boot/issues/58)).
+  - The stamp is defined once, in `scripts/build-research-pack.sh`. The gate
+    asks the script for the name instead of repeating it.
+  - `tests/research/check.sh` discovers the documents from the filesystem. It
+    fails, by file name, on one that is neither packed nor excluded with a
+    written reason, and it shows that it can fail.
 - **CI runs two more jobs**: the schema gate, and the PostgreSQL check with its
   SKIP disabled. `scripts/dev.sh --check` runs both and the loader gate.
 - **L7 is no longer wholly blocked.** Typed queries and row codecs still wait
