@@ -1,0 +1,190 @@
+# The schema's imperative shell: replay the history, report drift, print the
+# schema and the next plan, and probe the refusals.
+#
+# Nothing here decides anything. The core decides what each step means; this
+# file only chooses which steps to run and prints what came back, in sections
+# a script can read and a reader can diff by eye. Every section opens with its
+# name and closes with `end <name>`, so a section that grows does not move the
+# ones after it — the lesson the capability manifest's `end manifest` marker
+# taught the projections that read past it.
+#
+#   history  eleven lines per committed step:
+#            step kind table key label column_kind nullable policy
+#            outcome payload live
+#   drift    four lines: 1 InSync or 2 Diverged, what it carried, the first
+#            refused history step (0 for none), and 1 when the printed
+#            history and the core's replay are the same fold
+#   schema   the declared schema: table, primary, live, retired, then per
+#            key: key label kind nullable state
+#   plan     seven lines per key — the next migration, or kind 0 for none:
+#            kind table key label column_kind nullable policy
+#   regenerate
+#            a count, then eight lines per committed step: the step number,
+#            then what the planner proposes for that step's key when asked to
+#            get from the history before the step to the history after it:
+#            kind table key label column_kind nullable policy
+#   probes   a count, then ten lines per probe — a step that must be
+#            refused, the outcome it got, and how far it moved the live
+#            count, which a refusal may not:
+#            kind table key label column_kind nullable policy
+#            outcome payload live_delta
+#
+# scripts/ddl.sh projects the schema and history sections into SQL. The gate,
+# tests/schema/check.sh, reads every section by name.
+
+fn emit_migration(step: Migration) -> Int {
+    print(step.kind)
+    print(step.table)
+    print(step.key)
+    print(step.label)
+    print(step.column_kind)
+    print(step.nullable)
+    print(step.policy)
+    return 0
+}
+
+fn emit_history_step(number: Int, before: Schema) -> Schema {
+    let step: Migration = history_step(number)
+    let transition: SchemaStep = apply(before, step)
+    let after: Schema = step_schema(transition)
+    let outcome: SchemaOutcome = step_outcome(transition)
+    print(number)
+    emit_migration(step)
+    print(outcome_kind(outcome))
+    print(outcome_payload(outcome))
+    print(live_count(after))
+    return after
+}
+
+# The fold, printed as it goes. Recursion rather than a loop because the slice
+# has none, and because a fold is what this is.
+fn emit_history_from(schema: Schema, number: Int, last: Int) -> Schema {
+    if number > last {
+        return schema
+    }
+    let after: Schema = emit_history_step(number, schema)
+    return emit_history_from(after, number + 1, last)
+}
+
+fn emit_column(schema: Schema, key: Int) -> Int {
+    print(key)
+    print(label_at(schema, key))
+    print(kind_at(schema, key))
+    print(nullable_at(schema, key))
+    print(state_at(schema, key))
+    return 0
+}
+
+fn emit_probe(schema: Schema, step: Migration) -> Int {
+    let transition: SchemaStep = apply(schema, step)
+    let outcome: SchemaOutcome = step_outcome(transition)
+    emit_migration(step)
+    print(outcome_kind(outcome))
+    print(outcome_payload(outcome))
+    # How far the step moved the live count, so the output itself shows that
+    # a refusal consumed nothing rather than leaving that to a comment.
+    print(live_count(step_schema(transition)) - live_count(schema))
+    return 0
+}
+
+# The planner, asked to rediscover each committed step from the two schemas on
+# either side of it. It must propose the same step at the same key — a rename
+# as a rename, never as a drop and an add — and it must propose no policy,
+# because the policies in the history were written by a person.
+fn emit_regenerated_from(number: Int, last: Int) -> Int {
+    if number > last {
+        return 0
+    }
+    let step: Migration = history_step(number)
+    print(number)
+    emit_migration(plan(replay(number - 1), replay(number), step.key))
+    return emit_regenerated_from(number + 1, last)
+}
+
+fn main() -> Int {
+    print("kofun-boot schema")
+    print("contract")
+    print(1)
+
+    print("history")
+    print(history_length())
+    let traced: Schema = emit_history_from(empty_schema(), 1, history_length())
+    print("end history")
+
+    # The drift check uses the core's own fold, not the schema this file
+    # happened to thread through its printing. The last line of the section
+    # says whether the two agree, so the trace above is provably the history
+    # the check ran rather than a second, merely similar, walk over it.
+    let replayed: Schema = replay(history_length())
+    let declared: Schema = declared_schema()
+    let found: Drift = drift(declared, replayed)
+    print("drift")
+    print(drift_kind(found))
+    print(drift_payload(found))
+    print(refused_step(history_length()))
+    print(drift_kind(drift(traced, replayed)))
+    print("end drift")
+
+    print("schema")
+    print(declared.table)
+    print(declared.primary)
+    print(live_count(declared))
+    print(retired_count(declared))
+    emit_column(declared, 1)
+    emit_column(declared, 2)
+    emit_column(declared, 3)
+    emit_column(declared, 4)
+    print("end schema")
+
+    # From the replayed history to the declaration. Empty when they agree,
+    # and the gate requires that: a plan with a step in it is a migration
+    # somebody has not written yet.
+    print("plan")
+    emit_migration(plan(replayed, declared, 1))
+    emit_migration(plan(replayed, declared, 2))
+    emit_migration(plan(replayed, declared, 3))
+    emit_migration(plan(replayed, declared, 4))
+    print("end plan")
+
+    print("regenerate")
+    print(history_length())
+    emit_regenerated_from(1, history_length())
+    print("end regenerate")
+
+    # Each rule the history never needed to exercise, run once against the
+    # replayed schema. Every probe must be refused and must leave the schema
+    # where it was.
+    print("probes")
+    print(6)
+    # The table exists; a second CreateTable is not a way to reset it.
+    emit_probe(replayed, migration(
+        step_create_table(), table_users(), 1, label_id(), kind_bigint(), 0,
+        policy_none()
+    ))
+    # Key 2 is live; an add at a live key is a collision, not an update.
+    emit_probe(replayed, migration(
+        step_add_column(), table_users(), 2, label_nickname(), kind_text(), 1,
+        policy_none()
+    ))
+    # Key 4 was dropped at step 7, and a dropped key stays spent.
+    emit_probe(replayed, migration(
+        step_add_column(), table_users(), 4, label_nickname(), kind_text(), 1,
+        policy_none()
+    ))
+    # Past the bound, the refusal names the bound.
+    emit_probe(replayed, migration(
+        step_add_column(), table_users(), 5, label_nickname(), kind_boolean(), 1,
+        policy_none()
+    ))
+    # A drop with no policy is refused; data loss has to be written down.
+    emit_probe(replayed, migration(
+        step_drop_column(), table_users(), 3, 0, 0, 0, policy_none()
+    ))
+    # Tightening a nullable column needs the plan to say rows were backfilled.
+    emit_probe(replayed, migration(
+        step_set_nullable(), table_users(), 3, 0, 0, 0, policy_none()
+    ))
+    print("end probes")
+
+    return 0
+}
