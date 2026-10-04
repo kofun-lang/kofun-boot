@@ -79,6 +79,7 @@ gate は次のことを確かめる。
   - 二つの table、key を名指す外部 key、型変更、DB の schema digest
   - `Principal` と admission（`modules/router`）
   - 宣言 cache（`modules/cache`）
+  - 設定の解決と `boot explain`（`modules/config`）
 - **調査・設計段階のもの:** 次のものは、すべてが実装済みという意味ではない。各文書の
   adopt/adapt/defer と、ROADMAP の issue を参照すること。
   - Outbox / Inbox

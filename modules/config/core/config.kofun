@@ -1,0 +1,605 @@
+# kofun-boot configuration: a starter is a pure pack, and resolution is a value.
+#
+# Spring Boot's advantage is not the container. A dependency selects useful
+# configuration, the application can replace any default, and the conditions
+# report explains what applied. The mechanism is classpath scanning and
+# reflection, which a language without ambient authority cannot copy and
+# should not want to.
+#
+# The translation here:
+#
+#   a starter pack is a function from a field to the value it sets;
+#   resolution turns the packs and the application's overrides into one
+#   complete record, before anything else runs;
+#   every field of that record carries where its value came from and why;
+#   and `boot explain` prints it, so no default is invisible.
+#
+# Precedence is fixed: an override from the application's boot.conf, then a
+# starter pack, then the base pack's default. Two starter packs that set one
+# field to different values are refused, naming both, rather than one winning
+# by load order.
+#
+# The core reads no file and no environment. The application's boot.conf is
+# text; scripts/boot-config.sh compiles it into a BootInput value at build
+# time, and refuses an unknown key there, naming the nearest one.
+#
+# ../contract/config.kofun holds the canonical surface. This file projects it
+# into the Stage 2 slice: packs are bits of a mask, overrides are three fixed
+# slots, and the resolved record is flat.
+
+# ---------------------------------------------------------------- fields
+
+fn field_bind() -> Int {
+    return 1
+}
+
+fn field_port() -> Int {
+    return 2
+}
+
+fn field_body_limit() -> Int {
+    return 3
+}
+
+fn field_drain_ms() -> Int {
+    return 4
+}
+
+fn field_log_sink() -> Int {
+    return 5
+}
+
+fn field_count() -> Int {
+    return 5
+}
+
+fn bind_loopback() -> Int {
+    return 1
+}
+
+fn bind_any() -> Int {
+    return 2
+}
+
+fn sink_stdout() -> Int {
+    return 1
+}
+
+fn sink_stderr() -> Int {
+    return 2
+}
+
+# ----------------------------------------------------------------- packs
+
+# The base pack every application starts from. It sets every field, so a
+# resolved record has no hole.
+fn pack_http_minimal() -> Int {
+    return 1
+}
+
+# Starter packs. Each sets only the fields it is about.
+fn pack_http_public() -> Int {
+    return 2
+}
+
+fn pack_http_strict() -> Int {
+    return 4
+}
+
+fn pack_http_lenient() -> Int {
+    return 8
+}
+
+fn known_packs() -> Int {
+    return 15
+}
+
+fn source_default() -> Int {
+    return 1
+}
+
+fn source_pack() -> Int {
+    return 2
+}
+
+fn source_override() -> Int {
+    return 3
+}
+
+fn check_accepted() -> Int {
+    return 1
+}
+
+fn check_unknown_pack() -> Int {
+    return 2
+}
+
+fn check_missing_base() -> Int {
+    return 3
+}
+
+fn check_pack_conflict() -> Int {
+    return 4
+}
+
+fn check_unknown_key() -> Int {
+    return 5
+}
+
+fn check_duplicate_key() -> Int {
+    return 6
+}
+
+fn check_out_of_range() -> Int {
+    return 7
+}
+
+# ---------------------------------------------------------------- values
+
+# What the application asked for: a mask of packs, and up to three
+# overrides. Each override carries the boot.conf line it came from, so the
+# explanation can point at it. A key of zero is an empty slot.
+type BootInput = {
+    packs: Int,
+    o1_key: Int,
+    o1_value: Int,
+    o1_line: Int,
+    o2_key: Int,
+    o2_value: Int,
+    o2_line: Int,
+    o3_key: Int,
+    o3_value: Int,
+    o3_line: Int,
+}
+
+# The verdict on an input, before anything is resolved. Every refusal names
+# what it found.
+type ConfigCheck =
+    | Accepted(packs: Int)
+    | UnknownPack(packs: Int)
+    | MissingBase(pack: Int)
+    | PackConflict(field: Int)
+    | UnknownKey(key: Int)
+    | DuplicateKey(key: Int)
+    | OutOfRange(key: Int)
+
+# The complete configuration: every field's value, its source, and the
+# reason — the pack that set it, or the boot.conf line.
+type ResolvedBoot = {
+    packs: Int,
+    bind_value: Int,
+    bind_source: Int,
+    bind_reason: Int,
+    port_value: Int,
+    port_source: Int,
+    port_reason: Int,
+    body_limit_value: Int,
+    body_limit_source: Int,
+    body_limit_reason: Int,
+    drain_ms_value: Int,
+    drain_ms_source: Int,
+    drain_ms_reason: Int,
+    log_sink_value: Int,
+    log_sink_source: Int,
+    log_sink_reason: Int,
+}
+
+# ----------------------------------------------------------- arithmetic
+
+fn eq(left: Int, right: Int) -> Int {
+    if left == right {
+        return 1
+    }
+    return 0
+}
+
+fn has(mask: Int, bit: Int) -> Int {
+    return (mask // bit) % 2
+}
+
+fn between(value: Int, low: Int, high: Int) -> Int {
+    if value < low {
+        return 0
+    }
+    if value > high {
+        return 0
+    }
+    return 1
+}
+
+fn boot_input_of(
+    packs: Int,
+    o1_key: Int,
+    o1_value: Int,
+    o1_line: Int,
+    o2_key: Int,
+    o2_value: Int,
+    o2_line: Int,
+    o3_key: Int,
+    o3_value: Int,
+    o3_line: Int
+) -> BootInput {
+    let input: BootInput = BootInput(
+        packs: packs,
+        o1_key: o1_key,
+        o1_value: o1_value,
+        o1_line: o1_line,
+        o2_key: o2_key,
+        o2_value: o2_value,
+        o2_line: o2_line,
+        o3_key: o3_key,
+        o3_value: o3_value,
+        o3_line: o3_line
+    )
+    return input
+}
+
+# ------------------------------------------------------------- the packs
+
+# Whether a pack sets a field. The base pack sets every one.
+fn pack_sets(pack: Int, field: Int) -> Int {
+    if pack == pack_http_minimal() {
+        return 1
+    }
+    if pack == pack_http_public() {
+        return eq(field, field_bind())
+    }
+    if pack == pack_http_strict() {
+        return eq(field, field_body_limit()) + eq(field, field_drain_ms())
+    }
+    if pack == pack_http_lenient() {
+        return eq(field, field_body_limit())
+    }
+    return 0
+}
+
+# The value a pack sets a field to. Only read where pack_sets says so.
+fn pack_value(pack: Int, field: Int) -> Int {
+    if pack == pack_http_public() {
+        return bind_any()
+    }
+    if pack == pack_http_strict() {
+        if field == field_body_limit() {
+            return 1024
+        }
+        return 5000
+    }
+    if pack == pack_http_lenient() {
+        return 65536
+    }
+    if field == field_bind() {
+        return bind_loopback()
+    }
+    if field == field_port() {
+        return 8080
+    }
+    if field == field_body_limit() {
+        return 4096
+    }
+    if field == field_drain_ms() {
+        return 10000
+    }
+    return sink_stderr()
+}
+
+# Whether a selected starter pack sets this field. The base pack is not a
+# starter: it supplies defaults, and anything may replace them.
+fn starter_sets(input: BootInput, pack: Int, field: Int) -> Int {
+    return has(input.packs, pack) * pack_sets(pack, field)
+}
+
+# The selected starters that set a field, as a mask.
+fn setters(input: BootInput, field: Int) -> Int {
+    return starter_sets(input, pack_http_public(), field) * pack_http_public()
+        + starter_sets(input, pack_http_strict(), field) * pack_http_strict()
+        + starter_sets(input, pack_http_lenient(), field) * pack_http_lenient()
+}
+
+# Whether two selected starters set a field to different values. Two that
+# agree are not a conflict.
+fn disagree(input: BootInput, field: Int, left: Int, right: Int) -> Int {
+    if starter_sets(input, left, field) * starter_sets(input, right, field) == 0 {
+        return 0
+    }
+    return 1 - eq(pack_value(left, field), pack_value(right, field))
+}
+
+fn conflicted(input: BootInput, field: Int) -> Int {
+    return disagree(input, field, pack_http_public(), pack_http_strict())
+        + disagree(input, field, pack_http_public(), pack_http_lenient())
+        + disagree(input, field, pack_http_strict(), pack_http_lenient())
+}
+
+fn first_conflict(input: BootInput) -> Int {
+    if conflicted(input, field_bind()) > 0 {
+        return field_bind()
+    }
+    if conflicted(input, field_port()) > 0 {
+        return field_port()
+    }
+    if conflicted(input, field_body_limit()) > 0 {
+        return field_body_limit()
+    }
+    if conflicted(input, field_drain_ms()) > 0 {
+        return field_drain_ms()
+    }
+    if conflicted(input, field_log_sink()) > 0 {
+        return field_log_sink()
+    }
+    return 0
+}
+
+# ------------------------------------------------------------ overrides
+
+fn key_known(key: Int) -> Int {
+    return between(key, 1, field_count())
+}
+
+# Whether a value is one the field can hold. Port 0 asks the system for an
+# ephemeral port, which tests use so parallel runs cannot collide.
+fn in_range(key: Int, value: Int) -> Int {
+    if key == field_bind() {
+        return between(value, bind_loopback(), bind_any())
+    }
+    if key == field_port() {
+        return between(value, 0, 65535)
+    }
+    if key == field_body_limit() {
+        return between(value, 1, 1048576)
+    }
+    if key == field_drain_ms() {
+        return between(value, 0, 60000)
+    }
+    return between(value, sink_stdout(), sink_stderr())
+}
+
+# The first override slot whose key is set but unknown, or 0.
+fn unknown_slot(input: BootInput) -> Int {
+    if input.o1_key != 0 {
+        if key_known(input.o1_key) == 0 {
+            return 1
+        }
+    }
+    if input.o2_key != 0 {
+        if key_known(input.o2_key) == 0 {
+            return 2
+        }
+    }
+    if input.o3_key != 0 {
+        if key_known(input.o3_key) == 0 {
+            return 3
+        }
+    }
+    return 0
+}
+
+fn slot_key(input: BootInput, slot: Int) -> Int {
+    if slot == 1 {
+        return input.o1_key
+    }
+    if slot == 2 {
+        return input.o2_key
+    }
+    return input.o3_key
+}
+
+fn slot_value(input: BootInput, slot: Int) -> Int {
+    if slot == 1 {
+        return input.o1_value
+    }
+    if slot == 2 {
+        return input.o2_value
+    }
+    return input.o3_value
+}
+
+fn slot_line(input: BootInput, slot: Int) -> Int {
+    if slot == 1 {
+        return input.o1_line
+    }
+    if slot == 2 {
+        return input.o2_line
+    }
+    return input.o3_line
+}
+
+# How many override slots name this key.
+fn overrides_of(input: BootInput, key: Int) -> Int {
+    return eq(input.o1_key, key) + eq(input.o2_key, key) + eq(input.o3_key, key)
+}
+
+fn first_duplicate(input: BootInput) -> Int {
+    if overrides_of(input, field_bind()) > 1 {
+        return field_bind()
+    }
+    if overrides_of(input, field_port()) > 1 {
+        return field_port()
+    }
+    if overrides_of(input, field_body_limit()) > 1 {
+        return field_body_limit()
+    }
+    if overrides_of(input, field_drain_ms()) > 1 {
+        return field_drain_ms()
+    }
+    if overrides_of(input, field_log_sink()) > 1 {
+        return field_log_sink()
+    }
+    return 0
+}
+
+# The slot that overrides a key, or 0. Only meaningful once duplicates are
+# refused.
+fn override_slot(input: BootInput, key: Int) -> Int {
+    if input.o1_key == key {
+        return 1
+    }
+    if input.o2_key == key {
+        return 2
+    }
+    if input.o3_key == key {
+        return 3
+    }
+    return 0
+}
+
+fn first_out_of_range(input: BootInput) -> Int {
+    if input.o1_key != 0 {
+        if in_range(input.o1_key, input.o1_value) == 0 {
+            return input.o1_key
+        }
+    }
+    if input.o2_key != 0 {
+        if in_range(input.o2_key, input.o2_value) == 0 {
+            return input.o2_key
+        }
+    }
+    if input.o3_key != 0 {
+        if in_range(input.o3_key, input.o3_value) == 0 {
+            return input.o3_key
+        }
+    }
+    return 0
+}
+
+# --------------------------------------------------------------- the check
+
+# The packs first, then the overrides. Each refusal names what it found;
+# the two packs in a conflict are named by conflicting_packs.
+fn check(input: BootInput) -> ConfigCheck {
+    if between(input.packs, 0, known_packs()) == 0 {
+        return UnknownPack(input.packs)
+    }
+    if has(input.packs, pack_http_minimal()) == 0 {
+        return MissingBase(pack_http_minimal())
+    }
+    let conflict: Int = first_conflict(input)
+    if conflict > 0 {
+        return PackConflict(conflict)
+    }
+    let unknown: Int = unknown_slot(input)
+    if unknown > 0 {
+        return UnknownKey(slot_key(input, unknown))
+    }
+    let duplicate: Int = first_duplicate(input)
+    if duplicate > 0 {
+        return DuplicateKey(duplicate)
+    }
+    let outside: Int = first_out_of_range(input)
+    if outside > 0 {
+        return OutOfRange(outside)
+    }
+    return Accepted(input.packs)
+}
+
+# The selected starters that set a field, for a refusal to name both.
+fn conflicting_packs(input: BootInput, field: Int) -> Int {
+    if field == 0 {
+        return 0
+    }
+    return setters(input, field)
+}
+
+fn check_kind(verdict: ConfigCheck) -> Int {
+    let mut kind = 0
+    match verdict {
+        Accepted(_) => { kind = check_accepted() },
+        UnknownPack(_) => { kind = check_unknown_pack() },
+        MissingBase(_) => { kind = check_missing_base() },
+        PackConflict(_) => { kind = check_pack_conflict() },
+        UnknownKey(_) => { kind = check_unknown_key() },
+        DuplicateKey(_) => { kind = check_duplicate_key() },
+        OutOfRange(_) => { kind = check_out_of_range() },
+    }
+    return kind
+}
+
+fn check_payload(verdict: ConfigCheck) -> Int {
+    let mut payload = 0
+    match verdict {
+        Accepted(packs) => { payload = packs },
+        UnknownPack(packs) => { payload = packs },
+        MissingBase(pack) => { payload = pack },
+        PackConflict(field) => { payload = field },
+        UnknownKey(key) => { payload = key },
+        DuplicateKey(key) => { payload = key },
+        OutOfRange(key) => { payload = key },
+    }
+    return payload
+}
+
+# ------------------------------------------------------------ resolution
+
+# The one selected starter that sets a field, or 0. Only meaningful once
+# conflicts are refused: two that agree resolve to the first.
+fn starter_for(input: BootInput, field: Int) -> Int {
+    if starter_sets(input, pack_http_public(), field) == 1 {
+        return pack_http_public()
+    }
+    if starter_sets(input, pack_http_strict(), field) == 1 {
+        return pack_http_strict()
+    }
+    if starter_sets(input, pack_http_lenient(), field) == 1 {
+        return pack_http_lenient()
+    }
+    return 0
+}
+
+# One field: an override, then a starter, then the base pack's default.
+fn value_of(input: BootInput, field: Int) -> Int {
+    let slot: Int = override_slot(input, field)
+    if slot > 0 {
+        return slot_value(input, slot)
+    }
+    let starter: Int = starter_for(input, field)
+    if starter > 0 {
+        return pack_value(starter, field)
+    }
+    return pack_value(pack_http_minimal(), field)
+}
+
+fn source_of(input: BootInput, field: Int) -> Int {
+    if override_slot(input, field) > 0 {
+        return source_override()
+    }
+    if starter_for(input, field) > 0 {
+        return source_pack()
+    }
+    return source_default()
+}
+
+# The pack that set a field, or the boot.conf line of the override.
+fn reason_of(input: BootInput, field: Int) -> Int {
+    let slot: Int = override_slot(input, field)
+    if slot > 0 {
+        return slot_line(input, slot)
+    }
+    let starter: Int = starter_for(input, field)
+    if starter > 0 {
+        return starter
+    }
+    return pack_http_minimal()
+}
+
+# The complete record. Total, but only meaningful for an Accepted input:
+# the shell never resolves one the check refused.
+fn resolve(input: BootInput) -> ResolvedBoot {
+    let resolved: ResolvedBoot = ResolvedBoot(
+        packs: input.packs,
+        bind_value: value_of(input, field_bind()),
+        bind_source: source_of(input, field_bind()),
+        bind_reason: reason_of(input, field_bind()),
+        port_value: value_of(input, field_port()),
+        port_source: source_of(input, field_port()),
+        port_reason: reason_of(input, field_port()),
+        body_limit_value: value_of(input, field_body_limit()),
+        body_limit_source: source_of(input, field_body_limit()),
+        body_limit_reason: reason_of(input, field_body_limit()),
+        drain_ms_value: value_of(input, field_drain_ms()),
+        drain_ms_source: source_of(input, field_drain_ms()),
+        drain_ms_reason: reason_of(input, field_drain_ms()),
+        log_sink_value: value_of(input, field_log_sink()),
+        log_sink_source: source_of(input, field_log_sink()),
+        log_sink_reason: reason_of(input, field_log_sink())
+    )
+    return resolved
+}

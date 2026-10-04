@@ -367,6 +367,18 @@ Spring Boot 4 は auto-configuration を技術ごとの小さな module に分�
 - `boot explain` が全行を印字する。上書きを一つすると、変わるのは一行だけである。
 - capability manifest（既に成立）は、この報告の最初の section である。
 
+**状態。** 最初の slice が成立している（`modules/config`、
+[ADR 12](../adr/0012-configuration-is-resolved-before-anything-runs.md)）。
+
+- base pack `http_minimal` が五つの field をすべて決める。starter pack は三つある。
+- 優先順位は固定である。`boot.conf` の上書き、starter、base pack の既定値の順に強い。
+- 二つの starter が同じ field を違う値にすると、field と両方の pack を名指しして拒否する。
+- `boot.conf` は build 時に値へ compile する。未知の key は、最も近い名前を添えて拒否する。
+- 残りは #17 に残す。
+  - 明示的に宣言した環境入力
+  - `boot doctor`
+  - 解決前に socket を開かないことの serve lane での保証
+
 ## 9. Module と運用
 
 - **Spring Modulith の `verify()`** は、kofun-boot では
@@ -415,7 +427,7 @@ kofun-boot では DB は capability なので、配線は record の field を�
 | `boot openapi` / `boot gen client` | — | 成立 |
 | `boot db sql`（`dev.sh --schema`） | `prisma migrate diff`、`drizzle-kit generate` | 成立（投影の印字） |
 | `boot db plan` / `boot db check`（`dev.sh --db-plan`、`--db-check`） | `prisma migrate dev --create-only`、`drizzle-kit check` | 成立（[#57](https://github.com/kofun-lang/kofun-boot/issues/57)。質問はせず、policy も埋めない） |
-| `boot explain` | Spring の conditions report | R2 #17 |
+| `boot explain`（`dev.sh --explain`） | Spring の conditions report | 成立（最初の slice。`contracts/boot.explain`） |
 | `boot mock` | json-server | #34 |
 
 ## 拒否するもの

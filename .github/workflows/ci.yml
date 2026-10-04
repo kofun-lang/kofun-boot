@@ -77,6 +77,15 @@ jobs:
           submodules: true
       - run: sh tests/cache/check.sh
 
+  config:
+    name: Config — resolution is a value, and boot explain accounts for every field
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sh tests/config/check.sh
+
   schema-postgres:
     name: PostgreSQL — the SQL projections build one database, and shapes cost the same at every N
     runs-on: ubuntu-latest

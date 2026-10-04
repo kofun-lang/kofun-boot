@@ -1,0 +1,164 @@
+# Unit tests for the configuration core.
+#
+# The check first, one refusal per test on the smallest input that earns it.
+# Then resolution: where each field's value comes from, and that one
+# override moves one field.
+
+fn base_only() -> BootInput {
+    return boot_input_of(pack_http_minimal(), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+
+fn kind_of(input: BootInput) -> Int {
+    let verdict: ConfigCheck = check(input)
+    return check_kind(verdict)
+}
+
+fn payload_of(input: BootInput) -> Int {
+    let verdict: ConfigCheck = check(input)
+    return check_payload(verdict)
+}
+
+# ------------------------------------------------------------- the check
+
+fn test_the_base_pack_alone_is_accepted() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(base_only()), check_accepted())
+    failures = failures + expect_eq_int(payload_of(base_only()), pack_http_minimal())
+    return failures
+}
+
+fn test_a_starter_without_the_base_is_refused() -> Int {
+    let input: BootInput = boot_input_of(pack_http_strict(), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(input), check_missing_base())
+    failures = failures + expect_eq_int(payload_of(input), pack_http_minimal())
+    return failures
+}
+
+fn test_a_pack_nobody_defined_is_refused() -> Int {
+    let input: BootInput = boot_input_of(16 + pack_http_minimal(), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    return expect_eq_int(kind_of(input), check_unknown_pack())
+}
+
+# Two starters that set one field to different values are refused, naming
+# the field, and both packs are named beside it.
+fn test_two_starters_that_disagree_are_refused_naming_both() -> Int {
+    let input: BootInput = boot_input_of(
+        pack_http_minimal() + pack_http_strict() + pack_http_lenient(),
+        0, 0, 0, 0, 0, 0, 0, 0, 0
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(input), check_pack_conflict())
+    failures = failures + expect_eq_int(payload_of(input), field_body_limit())
+    failures = failures + expect_eq_int(conflicting_packs(input, field_body_limit()), pack_http_strict() + pack_http_lenient())
+    return failures
+}
+
+# Starters that set different fields, or one starter with itself, are not
+# a conflict.
+fn test_starters_on_different_fields_do_not_conflict() -> Int {
+    let input: BootInput = boot_input_of(
+        pack_http_minimal() + pack_http_public() + pack_http_strict(),
+        0, 0, 0, 0, 0, 0, 0, 0, 0
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(input), check_accepted())
+    failures = failures + expect_eq_int(disagree(input, field_body_limit(), pack_http_strict(), pack_http_strict()), 0)
+    return failures
+}
+
+fn test_an_unknown_key_is_refused_naming_it() -> Int {
+    let input: BootInput = boot_input_of(pack_http_minimal(), 9, 1, 2, 0, 0, 0, 0, 0, 0)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(input), check_unknown_key())
+    failures = failures + expect_eq_int(payload_of(input), 9)
+    return failures
+}
+
+fn test_a_key_set_twice_is_refused() -> Int {
+    let input: BootInput = boot_input_of(
+        pack_http_minimal(), field_port(), 9090, 2, field_port(), 9091, 3, 0, 0, 0
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(input), check_duplicate_key())
+    failures = failures + expect_eq_int(payload_of(input), field_port())
+    return failures
+}
+
+# Port 0 asks the system for an ephemeral port; 65536 is no port at all.
+fn test_a_value_out_of_range_is_refused_and_port_zero_is_not() -> Int {
+    let outside: BootInput = boot_input_of(pack_http_minimal(), field_port(), 65536, 2, 0, 0, 0, 0, 0, 0)
+    let ephemeral: BootInput = boot_input_of(pack_http_minimal(), field_port(), 0, 2, 0, 0, 0, 0, 0, 0)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(outside), check_out_of_range())
+    failures = failures + expect_eq_int(payload_of(outside), field_port())
+    failures = failures + expect_eq_int(kind_of(ephemeral), check_accepted())
+    return failures
+}
+
+# The packs are checked before the overrides.
+fn test_a_conflict_is_reported_before_an_unknown_key() -> Int {
+    let input: BootInput = boot_input_of(
+        pack_http_minimal() + pack_http_strict() + pack_http_lenient(),
+        9, 1, 2, 0, 0, 0, 0, 0, 0
+    )
+    return expect_eq_int(kind_of(input), check_pack_conflict())
+}
+
+# ------------------------------------------------------------ resolution
+
+fn test_every_default_names_the_base_pack() -> Int {
+    let resolved: ResolvedBoot = resolve(base_only())
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolved.bind_value, bind_loopback())
+    failures = failures + expect_eq_int(resolved.port_value, 8080)
+    failures = failures + expect_eq_int(resolved.body_limit_value, 4096)
+    failures = failures + expect_eq_int(resolved.log_sink_value, sink_stderr())
+    failures = failures + expect_eq_int(resolved.drain_ms_source, source_default())
+    failures = failures + expect_eq_int(resolved.drain_ms_reason, pack_http_minimal())
+    return failures
+}
+
+fn test_a_starter_replaces_a_default_and_names_itself() -> Int {
+    let input: BootInput = boot_input_of(
+        pack_http_minimal() + pack_http_public(), 0, 0, 0, 0, 0, 0, 0, 0, 0
+    )
+    let resolved: ResolvedBoot = resolve(input)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolved.bind_value, bind_any())
+    failures = failures + expect_eq_int(resolved.bind_source, source_pack())
+    failures = failures + expect_eq_int(resolved.bind_reason, pack_http_public())
+    failures = failures + expect_eq_int(resolved.port_source, source_default())
+    return failures
+}
+
+# An override beats the starter that set the same field, and names the
+# boot.conf line it came from.
+fn test_an_override_beats_a_starter_and_names_its_line() -> Int {
+    let input: BootInput = boot_input_of(
+        pack_http_minimal() + pack_http_strict(), field_body_limit(), 2048, 7,
+        0, 0, 0, 0, 0, 0
+    )
+    let resolved: ResolvedBoot = resolve(input)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolved.body_limit_value, 2048)
+    failures = failures + expect_eq_int(resolved.body_limit_source, source_override())
+    failures = failures + expect_eq_int(resolved.body_limit_reason, 7)
+    failures = failures + expect_eq_int(resolved.drain_ms_source, source_pack())
+    return failures
+}
+
+# One override moves one field and nothing else.
+fn test_one_override_moves_one_field() -> Int {
+    let before: ResolvedBoot = resolve(base_only())
+    let after: ResolvedBoot = resolve(
+        boot_input_of(pack_http_minimal(), field_port(), 9090, 3, 0, 0, 0, 0, 0, 0)
+    )
+    let mut failures = 0
+    failures = failures + expect_ne_int(before.port_value, after.port_value)
+    failures = failures + expect_eq_int(before.bind_value, after.bind_value)
+    failures = failures + expect_eq_int(before.body_limit_source, after.body_limit_source)
+    failures = failures + expect_eq_int(before.drain_ms_reason, after.drain_ms_reason)
+    failures = failures + expect_eq_int(before.log_sink_value, after.log_sink_value)
+    return failures
+}

@@ -62,6 +62,7 @@ The generated project already has the module boundary and its own gate.
 | `sh scripts/dev.sh --client` | typed TypeScript client projected from the route table |
 | `sh scripts/dev.sh --schema` | DDL and migration SQL projected from the schema |
 | `sh scripts/dev.sh --caches` | declared caches as manifest rows |
+| `sh scripts/dev.sh --explain` | `boot explain`: where every resolved configuration value came from |
 | `sh scripts/dev.sh --replay` | recorded session-trace replay |
 | `sh scripts/dev.sh --research` | deterministic research ZIP and SHA-256 |
 
@@ -98,6 +99,17 @@ needs every tag dropped by some write.
 ```sh
 sh scripts/dev.sh --caches          # contracts/caches.txt
 sh tests/cache/check.sh             # the build-time check, the replayed session, break tests
+```
+
+### Configuration
+
+`modules/config/boot.conf` selects starter packs and overrides fields. It is
+compiled into a value at build time, resolved before anything else runs, and
+explained field by field.
+
+```sh
+sh scripts/dev.sh --explain         # compile boot.conf, print contracts/boot.explain's lines
+sh tests/config/check.sh            # probe verdicts, one override is one line, break tests
 ```
 
 ### Record and replay
@@ -163,6 +175,7 @@ only place that builds the capability record and the only place that prints.
 - [ADR 9 — A migration history is a fold](adr/0009-a-migration-history-is-a-fold.md)
 - [ADR 10 — A round of fetches is a value](adr/0010-a-round-is-a-value.md)
 - [ADR 11 — A cache key is the handler's arguments](adr/0011-a-cache-key-is-the-arguments.md)
+- [ADR 12 — Configuration is resolved before anything runs](adr/0012-configuration-is-resolved-before-anything-runs.md)
 
 ### Research
 

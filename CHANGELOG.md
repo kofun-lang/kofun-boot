@@ -144,6 +144,27 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
   - Five break tests: a key without the caller, the declared arguments edited
     to match that key, an uninvalidated tag, a forgotten invalidation that
     only the trace can see, and a hand-edited manifest.
+- **Configuration is resolved before anything runs, and `boot explain`
+  accounts for every field** (first slice of
+  [#17](https://github.com/kofun-lang/kofun-boot/issues/17),
+  [ADR 12](docs/adr/0012-configuration-is-resolved-before-anything-runs.md)).
+  - `modules/config`: a starter is a pure pack. The base pack `http_minimal`
+    sets five fields, and three starters set some of them.
+  - Precedence is fixed: a `boot.conf` override, then a starter, then the
+    base default. Two starters that disagree are refused, naming the field
+    and both packs.
+  - The check also refuses an unknown pack, a missing base pack, an unknown
+    key, a key set twice, and a value out of range. Ten probes show each.
+  - A refused input exits 1 before printing any record.
+  - `scripts/boot-config.sh` compiles `boot.conf` into
+    `modules/config/shell/input.kofun` at build time. An unknown key or pack
+    is refused with the nearest real name.
+  - `scripts/boot-explain.sh` (`scripts/dev.sh --explain`) prints each
+    field's value, source, and reason. `contracts/boot.explain` is its
+    output.
+  - `tests/config/check.sh` requires one override to change exactly one line
+    and an override to beat a pack. It breaks precedence, conflict detection,
+    and the committed explanation, and runs three typos through the adapter.
 - **The database carries its schema digest**
   ([#51](https://github.com/kofun-lang/kofun-boot/issues/51)).
   - `scripts/schema-digest.sh` digests the declared tables, comments stripped.
@@ -243,8 +264,8 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
   - `tests/research/check.sh` discovers the documents from the filesystem. It
     fails, by file name, on one that is neither packed nor excluded with a
     written reason, and it shows that it can fail.
-- **CI runs four more jobs**: the schema gate, the loader gate, the cache
-  gate, and the PostgreSQL checks with their SKIP disabled.
+- **CI runs five more jobs**: the schema, loader, cache, and config gates,
+  and the PostgreSQL checks with their SKIP disabled.
   `scripts/dev.sh --check` runs all of them.
 - **L7 is no longer wholly blocked.** Typed queries and row codecs still wait
   on List/Text lowering. Schema, migration, and round decisions fit the

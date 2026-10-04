@@ -20,7 +20,7 @@ Everything below follows from that sentence.
 ```sh
 git clone --recurse-submodules https://github.com/kofun-lang/kofun-boot
 cd kofun-boot
-sh scripts/dev.sh                      # 139 unit tests, a build, a golden check
+sh scripts/dev.sh                      # 152 unit tests, a build, a golden check
 sh scripts/new.sh ../my-app --name my-app   # a project that already has the boundary and a schema
 cd ../my-app && sh tests/check.sh      # its own gate: boundary, suites, db check, golden, determinism
 ```
@@ -39,6 +39,7 @@ cd ../my-app && sh tests/check.sh      # its own gate: boundary, suites, db chec
 | `sh scripts/dev.sh --db-check` | drift, refusals, regeneration, and projections, without the break tests |
 | `sh scripts/dev.sh --shapes` | the SQL the loader's declared shapes compile to |
 | `sh scripts/dev.sh --caches` | the declared caches as manifest rows: key, lifetime, tags, and the HTTP rule each implies |
+| `sh scripts/dev.sh --explain` | `boot explain`: compile `boot.conf`, then print where every resolved value came from, defaults included |
 | `sh scripts/dev.sh --scaffold` | generate a project and run its gate |
 | `sh scripts/dev.sh --replay` | replay the recorded session trace |
 | `sh scripts/dev.sh --release` | verify the release is coherent; tag nothing |
@@ -413,15 +414,50 @@ covers the tag, and the trace names it:
 step 13: mine (id 1, caller 9) was a hit that served 0, but the read returns 15 uncached
 ```
 
+### Configuration — `boot explain` accounts for every field
+
+`modules/config/` takes Spring Boot's three real advantages without its
+container: a starter selects configuration, the application replaces any
+default, and a report says what applied. See
+[ADR 12](docs/adr/0012-configuration-is-resolved-before-anything-runs.md).
+
+- A starter is a pure pack: a function from a field to the value it sets.
+- Precedence is fixed: a `boot.conf` override, then a starter, then the base
+  pack's default. Two starters that set one field to different values are
+  refused, naming both, instead of one winning by load order.
+- Resolution produces a complete record first. A refused input prints why,
+  exits 1, and prints no record.
+- `boot.conf` is compiled at build time, so the binary reads no file and no
+  environment. A typo is refused with the nearest real name:
+
+```
+boot-config: boot.conf:2: unknown key http.prot; did you mean http.port?
+```
+
+`contracts/boot.explain` is the explanation for this repository's
+`boot.conf`:
+
+```
+packs            http_minimal http_strict
+http.bind        127.0.0.1  default   http_minimal
+http.port        9090       override  boot.conf:8
+http.body_limit  1024       pack      http_strict
+http.drain_ms    5000       pack      http_strict
+http.log_sink    stderr     default   http_minimal
+```
+
+`tests/config/check.sh` requires one override to change exactly one line of
+that output, and an override to beat the pack that set the same field.
+
 ## Testing, which is most of the reason to pick a framework
 
 **Unit tests need no server.** kotest pairs module-owned tests with their
-core, so tests call the core directly. A hundred and thirty-nine of them run
-in seven suites across six modules. Assertions accumulate rather than abort, so a broken change reports
+core, so tests call the core directly. A hundred and fifty-two of them run in
+eight suites across seven modules. Assertions accumulate rather than abort, so a broken change reports
 everything that is wrong at once instead of the first thing.
 
 ```
-Tests  139 passed (139 total, 7 suites)
+Tests  152 passed (152 total, 8 suites)
 ```
 
 **The database is real where it has to be, and nowhere else.** Business rules,
@@ -477,7 +513,8 @@ number quoted; hand-editing the OpenAPI document fails with the diff.
 | `modules/schema/` | schema bounded context: key identity, migrations as a fold, drift, planner, golden |
 | `modules/loader/` | loader bounded context: round coalescing and the N+1 measurement, golden |
 | `modules/cache/` | cache bounded context: declared keys, lifetimes, and tags; the build-time check; a replayed session, golden |
-| `contracts/` | generated/projected public artifacts: OpenAPI, typed client, replay trace, DDL, migration SQL, shape SQL, cache manifest |
+| `modules/config/` | configuration bounded context: starter packs, `boot.conf` compiled to a value, `ResolvedBoot`, golden |
+| `contracts/` | generated/projected public artifacts: OpenAPI, typed client, replay trace, DDL, migration SQL, shape SQL, cache manifest, `boot explain` |
 | `scripts/` | developer loop, module gate/test adapter, build and projection commands |
 | `tests/architecture/` | data-driven module ownership and contract-only dependency gate, tested both ways |
 | `tests/client/` | one call that must compile, two that must not |
@@ -487,6 +524,7 @@ number quoted; hand-editing the OpenAPI document fails with the diff.
 | `tests/loader/check.sh` | statements independent of N, coalescing, shape compilation, break tests |
 | `tests/loader/postgres.sh` | the server's own statement log: shapes cost the same at every N, per-row costs N + 1 |
 | `tests/cache/check.sh` | keys against handler signatures, the build-time check, served equals uncached, break tests |
+| `tests/config/check.sh` | probe verdicts, one override is one line of `boot explain`, typos named, break tests |
 | `tests/lib/postgres.sh` | the throwaway PostgreSQL cluster both real-database checks share |
 | `tests/integration/serve.sh` | a real server on a real socket |
 | `tests/scaffold/check.sh` | `boot new`'s output, generated and gated every run |

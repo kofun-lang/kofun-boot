@@ -19,6 +19,7 @@ set -eu
 #   scripts/dev.sh --db-check drift, refusals, and projections: boot db check
 #   scripts/dev.sh --shapes   print the SQL the loader's declared shapes compile to
 #   scripts/dev.sh --caches   print the declared caches as manifest rows
+#   scripts/dev.sh --explain  compile boot.conf, then print where every value came from
 #   scripts/dev.sh --scaffold generate a project and run its gate
 #   scripts/dev.sh --replay   replay the recorded session trace
 #   scripts/dev.sh --bench    measure, or refuse if the machine is busy
@@ -118,6 +119,18 @@ case "${1:-}" in
         binary=$(SEED=loader sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/loader")
         sh "$ROOT/scripts/shape-sql.sh" shapes "$binary"
         ;;
+    --explain)
+        # boot explain. boot.conf is compiled first, so what is explained is
+        # what the file says now; shell/input.kofun is that compiled form and
+        # is reviewed like any other projection.
+        sh "$ROOT/scripts/boot-config.sh" >"$ROOT/modules/config/shell/input.kofun.new" || {
+            rm -f "$ROOT/modules/config/shell/input.kofun.new"
+            exit 1
+        }
+        mv "$ROOT/modules/config/shell/input.kofun.new" "$ROOT/modules/config/shell/input.kofun"
+        binary=$(SEED=config sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/config")
+        sh "$ROOT/scripts/boot-explain.sh" "$binary"
+        ;;
     --caches)
         binary=$(SEED=cache sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/cache")
         sh "$ROOT/scripts/cache-manifest.sh" "$binary"
@@ -153,6 +166,7 @@ case "${1:-}" in
         sh "$ROOT/tests/loader/check.sh"
         sh "$ROOT/tests/loader/postgres.sh"
         sh "$ROOT/tests/cache/check.sh"
+        sh "$ROOT/tests/config/check.sh"
         sh "$ROOT/tests/research/check.sh"
         sh "$ROOT/tests/integration/serve.sh"
         sh "$ROOT/tests/scaffold/check.sh"
