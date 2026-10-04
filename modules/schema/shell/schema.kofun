@@ -8,6 +8,8 @@
 # ones after it — the lesson the capability manifest's `end manifest` marker
 # taught the projections that read past it.
 #
+#   identity `db.schema` and the digest of the declared tables, which every
+#            database the SQL projections build records as its marker
 #   history  a count, then twelve lines per committed step:
 #            step kind table key label column_kind nullable policy ref
 #            outcome payload live
@@ -141,6 +143,11 @@ fn main() -> Int {
     print("kofun-boot schema")
     print("contract")
     print(1)
+
+    print("identity")
+    print("db.schema")
+    print(schema_digest())
+    print("end identity")
 
     print("history")
     print(history_length())

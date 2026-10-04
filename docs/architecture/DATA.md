@@ -189,6 +189,9 @@ below.
   hash into a marker table. kofun-boot will write the schema digest the
   history replays to. The binary prints its declared digest in the capability
   manifest and refuses to start against a different one ([#51](https://github.com/kofun-lang/kofun-boot/issues/51)).
+  Today the binary prints `db.schema`, both SQL projections record it, and
+  `scripts/db-marker.sh` is the startup check until the shell holds a
+  database capability.
 - **Seed data is deterministic.** drizzle-seed generates data from a seed
   number. The mock already allocates ids from the value, so seeds are
   digest-pinned and a trace names the seed it was recorded against.
@@ -210,7 +213,8 @@ below.
 | kind changes: widening free, narrowing needs `Discard` | yes, a four-kind lattice | `modules/schema` ([#48](https://github.com/kofun-lang/kofun-boot/issues/48)) |
 | typed query values, row codecs, result types from selections | no; blocked on List/Text lowering ([#7](https://github.com/kofun-lang/kofun-boot/issues/7)) | [#50](https://github.com/kofun-lang/kofun-boot/issues/50) |
 | `LATERAL` shape compilation, per-relation split | yes, one relation; PostgreSQL's own statement log shows 1 and 2 statements at every N, against N + 1 per row | `modules/loader`, `contracts/shapes.sql`, `tests/loader/postgres.sh` ([#49](https://github.com/kofun-lang/kofun-boot/issues/49)) |
-| database capability, transactions, digest marker | no | [#51](https://github.com/kofun-lang/kofun-boot/issues/51) |
+| the database carries its schema digest; a mismatch is refused at startup | yes, as a shell adapter: both projections write `kofun_schema_marker`; `scripts/db-marker.sh` refuses a missing or different digest against real PostgreSQL | `scripts/schema-digest.sh`, `scripts/db-marker.sh` ([#51](https://github.com/kofun-lang/kofun-boot/issues/51)) |
+| database capability, transactions | no | L7 |
 | released history is append-only | no | [#52](https://github.com/kofun-lang/kofun-boot/issues/52) |
 
 The two executable modules follow the pattern of the router and the mock. The

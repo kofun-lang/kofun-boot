@@ -1,6 +1,10 @@
 kofun-boot schema
 contract
 1
+identity
+db.schema
+177800485
+end identity
 history
 11
 1

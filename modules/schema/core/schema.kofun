@@ -1170,6 +1170,16 @@ fn declared(table: Int) -> Schema {
     return declared_users()
 }
 
+# The schema identity: a digest of the two declarations above, computed by
+# scripts/schema-digest.sh from this file with comments stripped. The binary
+# prints it, both SQL projections write it into `kofun_schema_marker`, and
+# scripts/db-marker.sh refuses a database that holds another. The gate
+# recomputes it from the source and fails when this number is stale, so a
+# declaration cannot change without its identity changing with it.
+fn schema_digest() -> Int {
+    return 177800485
+}
+
 # ---------------------------------------------------- the migration history
 #
 # The committed migrations, in order. Each is a value; the SQL for each is a

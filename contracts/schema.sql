@@ -18,3 +18,10 @@ create table posts (
     views bigint, -- key 3
     primary key (id)
 );
+
+-- marker: the schema digest this database now holds
+create table if not exists kofun_schema_marker (
+    digest bigint not null
+);
+delete from kofun_schema_marker;
+insert into kofun_schema_marker (digest) values (177800485);

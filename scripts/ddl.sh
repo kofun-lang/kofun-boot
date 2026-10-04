@@ -128,6 +128,27 @@ header() {
     printf -- '-- contract: %s\n' "$contract"
 }
 
+# The marker: the schema digest the binary declares, recorded in the database
+# by both projections so a binary can refuse a database migrated to something
+# else (scripts/db-marker.sh). A database built from either file holds the
+# same marker table, so the schema dumps still compare equal.
+marker() {
+    identity=$(section identity)
+    test "$(printf '%s\n' "$identity" | sed -n 1p)" = db.schema ||
+        fail 'the identity section does not open with db.schema'
+    digest=$(printf '%s\n' "$identity" | sed -n 2p)
+    case $digest in
+        ''|*[!0-9]*) fail "the schema digest '$digest' is not a number" ;;
+    esac
+    printf '\n'
+    printf -- '-- marker: the schema digest this database now holds\n'
+    printf 'create table if not exists kofun_schema_marker (\n'
+    printf '    digest bigint not null\n'
+    printf ');\n'
+    printf 'delete from kofun_schema_marker;\n'
+    printf 'insert into kofun_schema_marker (digest) values (%s);\n' "$digest"
+}
+
 # Everything is written to a file first and printed only once the whole
 # projection succeeded, so a refusal can never leave half a script on stdout.
 OUT="$WORK/sql"
@@ -199,6 +220,7 @@ project_schema() {
                 printf -- '-- %s: retired keys, never to be reissued:%s\n' "$(table_name "$table")" "$retired"
             fi
         done
+        marker
     } >"$OUT"
 }
 
@@ -316,6 +338,7 @@ project_migrations() {
                     ;;
             esac
         done <"$WORK/steps"
+        marker
     } >"$OUT"
 }
 

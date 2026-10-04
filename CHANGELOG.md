@@ -96,6 +96,20 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
     module's non-suite `tests/*.kofun` files shared into each. A single
     kotest harness is bounded by the language's lexical-use limit per
     function.
+- **The database carries its schema digest**
+  ([#51](https://github.com/kofun-lang/kofun-boot/issues/51)).
+  - `scripts/schema-digest.sh` digests the declared tables, comments stripped.
+  - The schema binary prints the digest as `db.schema`. The gate recomputes it
+    and names a stale one.
+  - Both SQL projections end by recording it in `kofun_schema_marker`.
+  - `scripts/db-marker.sh DIGEST` is the startup check, as a shell adapter
+    until the shell holds a database capability. It refuses a database with
+    no marker, and one migrated to another digest, naming both numbers.
+  - `tests/schema/postgres.sh` runs it against real databases:
+    - the history and the declared DDL hold the digest;
+    - a database a step behind is refused;
+    - a rewritten marker is refused.
+  - The migration lock ignores the marker, which is not a step.
 - **`boot db plan / check / sql`**
   ([#57](https://github.com/kofun-lang/kofun-boot/issues/57)).
   - `scripts/db-plan.sh` (`scripts/dev.sh --db-plan`) prints the planner's

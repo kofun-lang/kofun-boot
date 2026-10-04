@@ -175,6 +175,7 @@ test "$(sed -n '/^contract$/{n;p;q;}' "$WORK/out")" = \
     "$(sed -n 's/^let SCHEMA_CONTRACT_VERSION = //p' "$contract")" ||
     fail 'the binary names a contract version the canonical surface does not'
 
+
 # History: every committed step applied. A refused step means the history
 # does not describe any database, and the fold would quietly replay around it.
 # Twelve lines per step: step kind table key label column_kind nullable policy
@@ -294,8 +295,22 @@ probe 8 'a column in a reference keeps its kind' '18 2 0'
 probe 9 'narrowing without a policy is destructive' '13 3 0'
 probe 10 'narrowing a NOT NULL column under discard needs it relaxed first' '14 2 0'
 
+# The schema identity, read from what the binary printed and recomputed here
+# from the declarations it claims to identify. A stale number would let a
+# changed declaration carry its old identity into every database marker.
+# Checked after drift on purpose: a declaration edited without its migration
+# is reported as the migration to write, which is the more useful answer, and
+# the stale identity is the next thing the gate says once that is written.
+section identity >"$WORK/identity"
+test "$(sed -n 1p "$WORK/identity")" = db.schema ||
+    fail 'the identity section does not name db.schema'
+printed_digest=$(sed -n 2p "$WORK/identity")
+declared_digest=$(sh "$ROOT/scripts/schema-digest.sh" "$core")
+test "$printed_digest" = "$declared_digest" ||
+    fail "the printed schema digest is stale: printed $printed_digest, the declared tables digest to $declared_digest; set schema_digest() to $declared_digest"
+
 lines=$(wc -l <"$WORK/out" | tr -d ' ')
-test "$lines" -eq 486 || fail "the decisions above cover the whole report: expected 486 lines, got $lines"
+test "$lines" -eq 490 || fail "the decisions above cover the whole report: expected 490 lines, got $lines"
 cmp -s "$expected" "$WORK/out" ||
     fail "named decisions passed but the recorded schema golden still differs:
 $(diff "$expected" "$WORK/out" | head -20)"
@@ -453,7 +468,14 @@ if test "${SCHEMA_SKIP_BREAK_TEST:-0}" != 1; then
         's/^    if from == kind_bigint() {$/    if from == kind_bigint() {\n        if to == kind_integer() {\n            return 1\n        }/' \
         'narrowing without a policy is destructive'
 
-    printf 'schema: a declared rename, a forgotten retirement or reference, a missing policy, a destructive planner, and a lattice that narrows silently fail by name: PASS\n'
+    # A declaration changed without its identity: every database marker
+    # would then vouch for a schema the binary no longer declares.
+    current_digest=$(sh "$ROOT/scripts/schema-digest.sh" "$core")
+    schema_break stale-digest \
+        "s/^    return $current_digest\$/    return 1/" \
+        'the printed schema digest is stale'
+
+    printf 'schema: a declared rename, a forgotten retirement or reference, a missing policy, a destructive planner, a lattice that narrows silently, and a stale digest fail by name: PASS\n'
 
     # A hand-edited projection.
     cp -R "$contracts" "$breaks/contracts"

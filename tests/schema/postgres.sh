@@ -42,6 +42,14 @@ sed 's/^    author_id bigint not null references users (id), -- key 2$/    autho
 cmp -s "$PG_WORK/schema.sql" "$PG_WORK/unreferenced.sql" &&
     fail 'the reference control changed nothing; its sed no longer matches contracts/schema.sql'
 
+# A database one step behind: the history up to, not including, its last
+# step. It never reached the marker, which the history writes after the last
+# step.
+last=$(sed -n 's/^-- step \([0-9][0-9]*\):.*/\1/p' "$PG_WORK/migrations.sql" | tail -1)
+sed "/^-- step $last:/,\$d" "$PG_WORK/migrations.sql" >"$PG_WORK/behind.sql"
+cmp -s "$PG_WORK/migrations.sql" "$PG_WORK/behind.sql" &&
+    fail 'the behind control changed nothing; the history has no last step to drop'
+
 pg_start
 
 build() {
@@ -66,6 +74,7 @@ build from_history migrations.sql
 build from_declaration schema.sql
 build from_broken broken.sql
 build from_unreferenced unreferenced.sql
+build from_behind behind.sql
 
 grep -q '^CREATE TABLE public.users' "$PG_WORK/from_history.schema" ||
     fail 'the database built from the history has no users table; the comparison would be vacuous'
@@ -81,6 +90,38 @@ if cmp -s "$PG_WORK/from_history.schema" "$PG_WORK/from_unreferenced.schema"; th
     fail 'a declared DDL with its reference removed built the same database; the comparison cannot see references'
 fi
 
+# ------------------------------------------------------------ the marker
+#
+# The startup check, against the real databases: the two built by this
+# history's SQL hold the digest the binary declares; one that stopped a step
+# short holds none; one whose marker names another digest is refused with
+# both numbers.
+digest=$(sh "$ROOT/scripts/schema-digest.sh")
+cp "$ROOT/scripts/db-marker.sh" "$PG_WORK/db-marker.sh"
+pg_own "$PG_WORK/db-marker.sh"
+marker_check() {
+    pg_run "PGHOST=$PG_WORK PGUSER=kofun PGDATABASE=$1 PSQL=$(pg_bin psql)" \
+        sh "$PG_WORK/db-marker.sh" "$digest"
+}
+marker_check from_history >/dev/null ||
+    fail 'the database built from the migration history does not hold the declared schema digest'
+marker_check from_declaration >/dev/null ||
+    fail 'the database built from the declared DDL does not hold the declared schema digest'
+if marker_check from_behind >"$PG_WORK/behind.log" 2>&1; then
+    fail 'a database one step behind passed the startup check'
+fi
+grep -Fq 'the database carries no schema marker' "$PG_WORK/behind.log" ||
+    fail "the database one step behind was not refused by name: $(cat "$PG_WORK/behind.log")"
+pg_run "$(pg_bin psql)" -h "$PG_WORK" -U kofun -d from_history -X -q \
+    -c "'update kofun_schema_marker set digest = 1'" >/dev/null ||
+    fail 'could not rewrite the marker for the mismatch control'
+if marker_check from_history >"$PG_WORK/other.log" 2>&1; then
+    fail 'a database migrated to another schema digest passed the startup check'
+fi
+grep -Fq "the database was migrated to schema digest 1; this binary declares $digest" "$PG_WORK/other.log" ||
+    fail "the mismatched marker was not refused by name: $(cat "$PG_WORK/other.log")"
+
 printf 'schema-postgres: %s\n' "$(pg_version)"
 printf 'schema-postgres: migrations.sql and schema.sql build the same database: PASS\n'
 printf 'schema-postgres: a declared DDL missing one NOT NULL, or its reference, builds a different one: PASS\n'
+printf 'schema-postgres: both hold schema digest %s; a database a step behind, or at another digest, is refused by name: PASS\n' "$digest"

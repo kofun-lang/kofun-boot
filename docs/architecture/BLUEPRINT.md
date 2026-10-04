@@ -361,6 +361,10 @@ Spring Boot 4 は auto-configuration を技術ごとの小さな module に分�
   - DB が、自分の migrate された schema digest を持つ
   - binary は、起動時に自分の宣言 digest と比べて、違えば拒否する
 
+  今日は binary が `db.schema` を印字する。SQL の二つの投影がその値を
+  `kofun_schema_marker` に記録する。そして `scripts/db-marker.sh` が、marker の無い
+  DB と別の digest の DB を、実際の PostgreSQL で名指しして拒否する。
+
 ## 10. Test — slice は annotation ではなく段
 
 | 段 | 何を見るか | 道具 | 状態 |

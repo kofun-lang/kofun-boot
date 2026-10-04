@@ -45,3 +45,10 @@ alter table posts add column views integer;
 
 -- step 11: widen kind on posts (key 3); every value is kept
 alter table posts alter column views type bigint;
+
+-- marker: the schema digest this database now holds
+create table if not exists kofun_schema_marker (
+    digest bigint not null
+);
+delete from kofun_schema_marker;
+insert into kofun_schema_marker (digest) values (177800485);

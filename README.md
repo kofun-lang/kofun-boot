@@ -309,7 +309,9 @@ SQL is a projection. `scripts/ddl.sh` writes `contracts/schema.sql` and
 `contracts/migrations.sql` from what the binary printed, and the gate fails
 on a hand edit. `tests/schema/postgres.sh` builds two PostgreSQL databases,
 one from each file, and requires byte-identical schema dumps, foreign key
-included. It then removes one `NOT NULL`, and separately the reference, and
+included. Both files end by recording the schema digest the binary prints as
+`db.schema`. `scripts/db-marker.sh` refuses a database whose marker is missing,
+or names another digest, by both numbers. It then removes one `NOT NULL`, and separately the reference, and
 requires each to differ.
 
 ### The loader — N+1 is a measurement

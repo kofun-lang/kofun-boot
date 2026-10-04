@@ -71,6 +71,9 @@ awk -v dir="$WORK" '
         print step > (dir "/steps")
         next
     }
+    # The marker after the last step records the schema the history reaches;
+    # it is not a step, and changes whenever the declaration does.
+    /^-- marker:/ { step = ""; next }
     step == "" { next }
     /^--/ { next }
     {
