@@ -80,9 +80,9 @@ Filed 2026-10-04 from [`docs/architecture/BLUEPRINT.md`](architecture/BLUEPRINT.
 - [#54](https://github.com/kofun-lang/kofun-boot/issues/54) capabilities: `Principal` — authorization is a value, never a layer *(landed; the socket header rule is [#61](https://github.com/kofun-lang/kofun-boot/issues/61))*
 - [#55](https://github.com/kofun-lang/kofun-boot/issues/55) contract: wire codecs generated from closed sums
 - [#56](https://github.com/kofun-lang/kofun-boot/issues/56) serve/effects: declared caches *(landed)*
-- [#57](https://github.com/kofun-lang/kofun-boot/issues/57) cli: `boot db plan / check / sql` *(landed; scaffolding a schema is [#60](https://github.com/kofun-lang/kofun-boot/issues/60))*
+- [#57](https://github.com/kofun-lang/kofun-boot/issues/57) cli: `boot db plan / check / sql` *(landed)*
 - [#58](https://github.com/kofun-lang/kofun-boot/issues/58) research: the pack includes the 2026-10 dossiers *(landed)*
-- [#60](https://github.com/kofun-lang/kofun-boot/issues/60) cli: `boot new` scaffolds a schema module, and its gate runs `boot db check` *(split from #57)*
+- [#60](https://github.com/kofun-lang/kofun-boot/issues/60) cli: `boot new` scaffolds a schema module, and its gate runs `boot db check` *(split from #57; landed)*
 
 Blocked on a filed dependency, not on refinement:
 

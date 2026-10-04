@@ -410,7 +410,7 @@ kofun-boot では DB は capability なので、配線は record の field を�
 
 | コマンド | 相当するもの | 状態 |
 |---|---|---|
-| `boot new` | `create-next-app`、Spring Initializr、`rails new` | 成立（生成物は毎 CI で自分の gate を通す） |
+| `boot new` | `create-next-app`、Spring Initializr、`rails new` | 成立（生成物は毎 CI で自分の gate を通す。一つの table を持つ schema と `db.sh check / sql` も生成する。[#60](https://github.com/kofun-lang/kofun-boot/issues/60)） |
 | `boot dev` | `next dev` | 成立（`--watch`） |
 | `boot openapi` / `boot gen client` | — | 成立 |
 | `boot db sql`（`dev.sh --schema`） | `prisma migrate diff`、`drizzle-kit generate` | 成立（投影の印字） |
@@ -459,5 +459,5 @@ kofun-boot では DB は capability なので、配線は record の field を�
 | [#54](https://github.com/kofun-lang/kofun-boot/issues/54) | `Principal`: 認可は handler が受け取る値にする | L3 | 実装済み（socket 層は [#61](https://github.com/kofun-lang/kofun-boot/issues/61)） |
 | [#55](https://github.com/kofun-lang/kofun-boot/issues/55) | 閉じた和から生成する wire codec。汎用 deserializer は持たない | L1 | 未着手 |
 | [#56](https://github.com/kofun-lang/kofun-boot/issues/56) | 宣言 cache（key は引数から作る。寿命と tag を宣言する） | L2/L11 | 実装済み |
-| [#57](https://github.com/kofun-lang/kofun-boot/issues/57) | `boot db plan / check / sql` | L8 | 実装済み（`boot new` の雛形は [#60](https://github.com/kofun-lang/kofun-boot/issues/60)） |
+| [#57](https://github.com/kofun-lang/kofun-boot/issues/57) | `boot db plan / check / sql` | L8 | 実装済み（`boot new` の雛形も [#60](https://github.com/kofun-lang/kofun-boot/issues/60) で実装済み） |
 | [#58](https://github.com/kofun-lang/kofun-boot/issues/58) | research pack に 2026-10 の文書を入れ、日付を更新する | R0/L10 | 実装済み |

@@ -171,8 +171,21 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
     `modules/schema/tests/plan.expected` for a declaration edited three ways.
     It then appends that source with the one policy a person must write, and
     requires the edited declaration to replay in sync.
-  - Scaffolding a schema into `boot new` is split into
-    [#60](https://github.com/kofun-lang/kofun-boot/issues/60).
+- **`boot new` scaffolds a schema**
+  ([#60](https://github.com/kofun-lang/kofun-boot/issues/60)).
+  - The generated project gets `modules/schema/`: one `items` table, a
+    one-step history, a core, a shell, and seven unit tests that keep passing
+    as the schema grows.
+  - `db.sh check` requires every step to apply, the history to replay to the
+    declaration, and the planner to regenerate every step with no policy.
+    `db.sh sql` prints the DDL, and the generated gate records it as
+    `modules/schema/schema.sql` and refuses a hand edit.
+  - The core is the schema engine cut to one table. The language slice has no
+    module imports and refuses a function nobody calls, so a project owns
+    the part of the engine it uses.
+  - `tests/scaffold/check.sh` edits the generated declaration without a
+    migration and requires the generated gate to name the key and the step
+    the planner proposes.
 - **Released migration history is append-only**
   ([#52](https://github.com/kofun-lang/kofun-boot/issues/52)).
   - `scripts/migrations-lock.sh release VERSION` pins each released step's

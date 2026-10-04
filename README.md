@@ -20,9 +20,9 @@ Everything below follows from that sentence.
 ```sh
 git clone --recurse-submodules https://github.com/kofun-lang/kofun-boot
 cd kofun-boot
-sh scripts/dev.sh                      # 99 unit tests, a build, a golden check
-sh scripts/new.sh ../my-app --name my-app   # a project that already has the boundary
-cd ../my-app && sh tests/check.sh      # its own gate: boundary, suite, golden, determinism
+sh scripts/dev.sh                      # 139 unit tests, a build, a golden check
+sh scripts/new.sh ../my-app --name my-app   # a project that already has the boundary and a schema
+cd ../my-app && sh tests/check.sh      # its own gate: boundary, suites, db check, golden, determinism
 ```
 
 | command | what |
@@ -437,8 +437,13 @@ keep-alive across two requests, and SIGTERM drain — killing the process on
 every exit path. Port 0 means parallel runs cannot collide.
 
 **The scaffold is a tested fixture, not a template.** `tests/scaffold/check.sh`
-generates a project on every CI run, runs *its* gate, and then breaks its core
-and requires that gate to refuse. A scaffold verified only by having been
+generates a project on every CI run, runs *its* gate, and then breaks it three
+ways and requires that gate to refuse each: a core that constructs a
+capability, a schema declaration edited without its migration (the gate names
+the key and the step the planner proposes), and a hand-edited `schema.sql`.
+The project's schema is the schema engine cut to one table: the language slice
+has no module imports and refuses a function nobody calls, so a project owns
+the part of the engine it uses. A scaffold verified only by having been
 written once rots the first time the language moves — and rots in someone
 else's afternoon rather than in this build.
 
