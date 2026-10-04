@@ -276,8 +276,9 @@ cmp -s "$shapes_sql" "$WORK/shapes.sql" ||
     fail "contracts/shapes.sql is not the projection of the shapes the binary printed:
 $(diff "$shapes_sql" "$WORK/shapes.sql" | head -20)"
 for load in join split; do
-    printed=$(awk -v load="$load" '
-        $0 ~ ("load " load ":") { inside = 1; next }
+    # Not `-v load=`: gawk refuses that name as a command-line variable.
+    printed=$(awk -v want="$load" '
+        $0 ~ ("load " want ":") { inside = 1; next }
         /^-- shape:/ { inside = 0 }
         inside && /;$/ { n++ }
         END { print n + 0 }
