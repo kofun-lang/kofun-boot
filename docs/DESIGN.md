@@ -151,7 +151,26 @@ gate) is the substrate.
   binds 0.0.0.0 is the same bug. Defaults exist, are few, and are printed.
 - **No feature without a gate.** Inherited from the language, non-negotiable.
 
-## 9. Versioning and the road
+## 9. Data
+
+The data lane follows the same shape as the router: a declaration, pure
+decisions over it, and projections gated against drift. The schema is a
+value. Each column is addressed by a key, not a name, so renames are
+declared rather than guessed and dropped keys are never reissued. A
+migration history is a fold over a pure `apply`, so the schema it produces
+is computed at build time with no database. SQL is a projection of those
+values, checked once against a real PostgreSQL.
+
+Queries follow the effect model. The core cannot load anything behind a
+field read, and it asks by returning a round of fetches as a value. The
+interpreter coalesces that round to one statement per source. The statements
+a request costs are measured at several sizes of the same data.
+
+[`architecture/DATA.md`](architecture/DATA.md) holds the reasoning;
+[`architecture/BLUEPRINT.md`](architecture/BLUEPRINT.md) places it in the
+whole design.
+
+## 10. Versioning and the road
 
 kofun-boot tracks the pinned language revision in `vendor/kofun`; a language
 capability landing (C ABI callbacks, structured concurrency, List/Text

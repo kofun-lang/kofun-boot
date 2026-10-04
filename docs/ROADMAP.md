@@ -19,7 +19,7 @@ have to break.
 | [L4 #4](https://github.com/kofun-lang/kofun-boot/issues/4) | replay | trace format v1 (versioned, digest-pinned like tzdb fixtures); record mode; replay mode; hostile-environment gate | — |
 | [L5 #5](https://github.com/kofun-lang/kofun-boot/issues/5) | speed | benchmark gate on `benchmarks/http` harness; recorded baselines; regression = failure; published same-box comparisons vs Elysia/Gin/Hono | — |
 | [L6 #6](https://github.com/kofun-lang/kofun-boot/issues/6) | concurrency | scoped spawn/join surface; cancellation as typed result; deterministic schedule replay | kofun #898 RFC, #736 |
-| [L7 #7](https://github.com/kofun-lang/kofun-boot/issues/7) | data | schema-as-contract (drizzle direction); **API derived from schema (Hasura's move)**; typed queries; migrations as replayable traces; PostgREST interop | List/Text lowering maturity (kofun #919 lane) |
+| [L7 #7](https://github.com/kofun-lang/kofun-boot/issues/7) | data | schema-as-contract (drizzle direction) — **executable for one table: key identity, migrations as a fold, drift without a database ([#45](https://github.com/kofun-lang/kofun-boot/issues/45))**; **N+1 as a measurement ([#46](https://github.com/kofun-lang/kofun-boot/issues/46))**; API derived from schema (Hasura's move); typed queries; PostgREST interop | typed queries and row codecs only: List/Text lowering maturity (kofun #919 lane) |
 | [L8 #8](https://github.com/kofun-lang/kofun-boot/issues/8) | cli & dx | `boot new/dev/test/bench/openapi/gen`; **`boot mock` — json-server's convenience, replayable**; scaffolds that compile with the core/shell split; watch-reload | — |
 | [L9 #9](https://github.com/kofun-lang/kofun-boot/issues/9) | desktop | webview shell (KB-scale, gated size); wasm32 guest via host ABI v1; typed IPC = the router contract; **UI quality as a discipline, not a default (taste-skill)** | kofun #906 activation lanes |
 | [L10 #11](https://github.com/kofun-lang/kofun-boot/issues/11) | site & docs | tutorial that never lies (every snippet is a gated fixture); comparison pages that show their measurement | — |
@@ -55,6 +55,8 @@ stories.
 | req/s vs Elysia, same box, same handler | L5 published run | *(unmeasured)* |
 | desktop binary size vs Tauri hello | L9 gate | *(unmeasured; kofun native ELF fixtures are KB-scale, which is the reason to believe the bar is reachable)* |
 | replay determinism | L4 gate | seed already holds it: two runs, both backends, `env -i` — byte-identical |
+| statements per request as N grows | L7 loader gate | seed: the shipped strategy costs 2 at N = 1, 2, 3, 4; the sequential control costs N + 1 and is refused |
+| schema drift detected without a database | L7 schema gate | seed: a 7-step history replays to the declaration on both backends; both SQL projections build the same PostgreSQL 16 database |
 
 ## Filed and ready now
 
@@ -66,7 +68,25 @@ stories.
 - [#29](https://github.com/kofun-lang/kofun-boot/issues/29) desktop: IME and accessibility are gates — no number is recorded before they pass
 - [#30](https://github.com/kofun-lang/kofun-boot/issues/30) desktop: decompose the bar — two of the four webview costs are the language's win, not the renderer's
 
+Filed 2026-10-04 from [`docs/architecture/BLUEPRINT.md`](architecture/BLUEPRINT.md):
+
+- [#45](https://github.com/kofun-lang/kofun-boot/issues/45) data: the schema is a value — key identity, migrations as a fold, drift without a database *(landed with this design)*
+- [#46](https://github.com/kofun-lang/kofun-boot/issues/46) data: N+1 as a measurement — a round is a value *(landed with this design)*
+- [#47](https://github.com/kofun-lang/kofun-boot/issues/47) data: more than one table, and foreign keys that name a key
+- [#48](https://github.com/kofun-lang/kofun-boot/issues/48) data: column kind changes — widening applies, narrowing needs Discard
+- [#49](https://github.com/kofun-lang/kofun-boot/issues/49) data: declared shapes compile to a fixed number of statements
+- [#51](https://github.com/kofun-lang/kofun-boot/issues/51) data/capabilities: the database carries its schema digest
+- [#52](https://github.com/kofun-lang/kofun-boot/issues/52) data/governance: released migration history is append-only
+- [#54](https://github.com/kofun-lang/kofun-boot/issues/54) capabilities: `Principal` — authorization is a value, never a layer
+- [#55](https://github.com/kofun-lang/kofun-boot/issues/55) contract: wire codecs generated from closed sums
+- [#56](https://github.com/kofun-lang/kofun-boot/issues/56) serve/effects: declared caches
+- [#57](https://github.com/kofun-lang/kofun-boot/issues/57) cli: `boot db plan / check / sql`
+- [#58](https://github.com/kofun-lang/kofun-boot/issues/58) research: the pack includes the 2026-10 dossiers
+
 Blocked on a filed dependency, not on refinement:
+
+- [#50](https://github.com/kofun-lang/kofun-boot/issues/50) data: typed query values and row codecs — blocked on List/Text lowering
+- [#53](https://github.com/kofun-lang/kofun-boot/issues/53) data: data migrations and backfills as `Cmd` values — blocked on [#50](https://github.com/kofun-lang/kofun-boot/issues/50)
 
 - [#32](https://github.com/kofun-lang/kofun-boot/issues/32) replay: the trace format is the `Cmd`/`Msg` sequence — blocked by [#31](https://github.com/kofun-lang/kofun-boot/issues/31)
 
@@ -93,3 +113,8 @@ do not.
 | [Tauri](https://github.com/tauri-apps/tauri) | the system webview is already installed | the multi-megabyte binary; ours is a gated KB number |
 | [taste-skill](https://github.com/Leonxlnx/taste-skill) | UI quality as an explicit discipline for generated interfaces | — |
 | [Rails](https://github.com/rails/rails) | generators, conventions, the first-hour experience | convention that cannot be checked; every scaffold we emit is a tested fixture |
+| [Next.js](https://github.com/vercel/next.js) | colocation; typed routes; a static shell with streamed holes | the filesystem as the route table, inferred cache keys, endpoints that look like calls, and authorization in middleware ([`BLUEPRINT.md`](architecture/BLUEPRINT.md) §1–3, §6) |
+| [Prisma](https://github.com/prisma/orm) | one schema; generated migration SQL committed and reviewed; a contract digest in the database (Prisma 8) | renames guessed from names; a shadow database to compute what a history produces ([ADR 8](adr/0008-a-column-is-its-key.md), [ADR 9](adr/0009-a-migration-history-is-a-fold.md)) |
+| [Drizzle](https://github.com/drizzle-team/drizzle-orm) | the schema in the host language; SQL a reader can predict; relational queries that are one statement; seeded data | interactive rename prompts; `push` without history |
+| [Haxl](https://github.com/facebook/Haxl) / [DataLoader](https://github.com/graphql/dataloader) | independent fetches gathered into one round, each key once | the Applicative instance and the event-loop tick; a round is already a value here ([ADR 10](adr/0010-a-round-is-a-value.md)) |
+| [protobuf](https://protobuf.dev/programming-guides/proto3/#reserved) | identity is a number; a deleted number is `reserved` | — |

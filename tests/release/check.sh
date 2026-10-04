@@ -171,6 +171,10 @@ while IFS= read -r pillar; do
             gate="tests/boot/check.sh" ;;
         'A CLI worth living in')
             gate="tests/scaffold/check.sh" ;;
+        'Schema as a contract')
+            gate="tests/schema/check.sh" ;;
+        'No N+1 by construction')
+            gate="tests/loader/check.sh" ;;
         *)
             fail "README claims '$pillar' holds today, but the release gate does not know which gate proves it; add it here or soften the claim" ;;
     esac

@@ -13,6 +13,7 @@ set -eu
 #   scripts/dev.sh --openapi  print the document the route table projects
 #   scripts/dev.sh --research build the deterministic research ZIP
 #   scripts/dev.sh --client   print the typed client the route table projects
+#   scripts/dev.sh --schema   print the DDL and migration SQL the schema projects
 #   scripts/dev.sh --scaffold generate a project and run its gate
 #   scripts/dev.sh --replay   replay the recorded session trace
 #   scripts/dev.sh --bench    measure, or refuse if the machine is busy
@@ -93,6 +94,12 @@ case "${1:-}" in
     --client)
         sh "$ROOT/scripts/client-ts.sh"
         ;;
+    --schema)
+        binary=$(SEED=schema sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/schema")
+        sh "$ROOT/scripts/ddl.sh" schema "$binary"
+        printf '\n'
+        sh "$ROOT/scripts/ddl.sh" migrations "$binary"
+        ;;
     --bench)
         shift
         sh "$ROOT/scripts/bench.sh" "${1:-record}"
@@ -119,6 +126,9 @@ case "${1:-}" in
         run_tests
         sh "$ROOT/tests/architecture/check.sh"
         sh "$ROOT/tests/boot/check.sh"
+        sh "$ROOT/tests/schema/check.sh"
+        sh "$ROOT/tests/schema/postgres.sh"
+        sh "$ROOT/tests/loader/check.sh"
         sh "$ROOT/tests/research/check.sh"
         sh "$ROOT/tests/integration/serve.sh"
         sh "$ROOT/tests/scaffold/check.sh"

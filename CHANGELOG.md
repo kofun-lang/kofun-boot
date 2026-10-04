@@ -11,7 +11,104 @@ the `Unmeasured at this release` section added as a local requirement.
 
 ## [Unreleased]
 
-Nothing yet.
+The data lane has its first executable evidence. The schema is a value, a
+migration history is a fold, and N+1 is a measurement. The framework design is
+written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
+
+### Added
+
+- **`modules/schema` — the schema as a value**
+  ([#45](https://github.com/kofun-lang/kofun-boot/issues/45)).
+  - A column is identified by its **key**, not its name
+    ([ADR 8](docs/adr/0008-a-column-is-its-key.md)). A rename keeps the key, so
+    it is never inferred. A drop retires the key, and a retired key is refused
+    as `KeyRetired`, never reissued.
+  - `apply : Schema -> Migration -> SchemaStep` is pure, so a history is a
+    fold ([ADR 9](docs/adr/0009-a-migration-history-is-a-fold.md)).
+    `replay(history)` is the shadow database. `drift` returns `InSync(live)` or
+    `Diverged(key)`.
+  - A drop needs `Discard`. A NOT NULL addition or tightening needs a
+    backfill. The primary key cannot be dropped or relaxed.
+  - The planner decides by key and never supplies a policy.
+- **`scripts/ddl.sh`, `contracts/schema.sql`, `contracts/migrations.sql`** —
+  SQL projected from what the schema binary printed. Every code must resolve
+  to a name, and nothing is printed on a refusal. `scripts/dev.sh --schema`
+  prints both.
+- **`tests/schema/check.sh`** — the schema gate.
+  - It reads named decisions from the binary:
+    - every committed step applies;
+    - the history replays to the declaration;
+    - the plan is empty;
+    - the planner regenerates every committed step by key with no policy;
+    - six refusal probes move nothing.
+  - It checks that the committed SQL is the projection.
+  - Six break tests fail by name:
+    - a declared rename without a migration;
+    - a forgotten retirement;
+    - a history policy removed;
+    - a planner that drops instead of renaming;
+    - a hand-edited projection;
+    - an unnamed column.
+- **`tests/schema/postgres.sh`** — a throwaway PostgreSQL cluster on a Unix
+  socket.
+  - The migration SQL and the declared DDL must build databases with
+    byte-identical schema dumps.
+  - A negative control with one `NOT NULL` removed must differ.
+  - CI sets `SCHEMA_REQUIRE_POSTGRES=1`, so a missing server fails rather
+    than skips.
+- **`modules/loader` — N+1 as a measurement**
+  ([#46](https://github.com/kofun-lang/kofun-boot/issues/46),
+  [ADR 10](docs/adr/0010-a-round-is-a-value.md)).
+  - The interpreter coalesces each round of fetches before running it: one
+    statement per source, each key sent once.
+  - One request is written three ways, and all three load the same answer:
+    - sequential: 2 3 4 5 statements for N = 1..4;
+    - one round: 2 at every N;
+    - declared shape: 1 at every N.
+- **`tests/loader/check.sh`** — refuses a shipped strategy whose statement
+  count grows with N, naming the counts. It requires the sequential control
+  to keep growing, so the detector is never vacuous. Three break tests fail by
+  name:
+  - a sequential application;
+  - an uncoalesced interpreter;
+  - a lost dedupe.
+- **Two pillars in the README table**, each mapped to its gate in
+  `tests/release/check.sh`:
+  - *Schema as a contract*
+  - *No N+1 by construction*
+- **Design documents.**
+  - [`docs/architecture/BLUEPRINT.md`](docs/architecture/BLUEPRINT.md): the
+    whole framework, layer by layer, with what is taken and refused from each
+    reference and the gate behind each claim.
+  - [`docs/architecture/DATA.md`](docs/architecture/DATA.md): the data lane's
+    decisions.
+  - [`docs/research/NEXT_PRISMA_DRIZZLE.md`](docs/research/NEXT_PRISMA_DRIZZLE.md)
+    and [`docs/research/N_PLUS_ONE.md`](docs/research/N_PLUS_ONE.md): the
+    dated, source-linked surveys behind them.
+- **Issues filed from the design**: #47–#58. These cover:
+  - foreign keys, kind changes, shape compilation, typed queries, the
+    database digest, append-only history, and data migrations (L7);
+  - `Principal` (L3);
+  - generated wire codecs (L1);
+  - declared caches (L2/L11);
+  - `boot db` (L8);
+  - the research pack (R0).
+
+### Changed
+
+- **CI runs two more jobs**: the schema gate, and the PostgreSQL check with its
+  SKIP disabled. `scripts/dev.sh --check` runs both and the loader gate.
+- **L7 is no longer wholly blocked.** Typed queries and row codecs still wait
+  on List/Text lowering. Schema, migration, and round decisions fit the
+  fixed-slot seed pattern and are now executable.
+
+### Unmeasured at this release
+
+- Speed — L5; the benchmark harness exists and refuses to produce a number it
+  does not trust, but no baseline has been recorded.
+- Desktop lighter than Tauri — L9; blocked on the language's wasm32 activation
+  lanes, and gated behind IME and accessibility conformance before any number
+  is recorded ([#29](https://github.com/kofun-lang/kofun-boot/issues/29)).
 
 ## [0.5.1] - 2026-08-11
 
