@@ -125,8 +125,9 @@ Server Function endpoint に届く Flight protocol の deserialization から生
 **Next.js から学ぶこと。** CVE-2025-29927（CVSS 9.1、2025-03-21）では、内部の
 再帰防止用 header `x-middleware-subrequest` を外から付けるだけで middleware 全体を
 飛ばせた。認可を middleware に置いていた application は、その認可ごと飛ばされた。
-Next.js 16 は middleware を `proxy.ts` に改名し、「認可の置き場所ではない」と
-はっきりさせた。
+Next.js 16 は `middleware` という名前を非推奨にして、`proxy` に改名した。改名の
+理由は、Express 型の middleware との混同を避けるためである。Edge 用には、非推奨の
+まま `middleware.ts` が残る。
 
 ここから学ぶべき一般則は二つある。
 
@@ -282,7 +283,8 @@ Django の `assertNumQueries` は一つの fixture で数を固定する。
 - Next 15: 既定を反転した
 - Next 16: `cacheComponents` で opt-in の `"use cache"`、`cacheLife`、`cacheTag` になった
 
-Vercel 自身も「Our Journey with Caching」で失敗を認めている。
+Next.js の blog「Our Journey with Caching」（Sebastian Markbåge、2024-10-24）も、
+既定値が開発体験を損なったと認めている。
 それでも 2026-09-30 には次の advisory が出ている。
 
 - 入れ子の `"use cache"` で root param の値をまたいで cache が漏れる（GHSA-h694-7cp9-m8p3）
@@ -353,7 +355,8 @@ Spring Boot 4 は auto-configuration を技術ごとの小さな module に分�
   replay を gate にする。
 - **Actuator** の health と readiness は、route の横に手書きしない。
   runtime contract の投影にする（L2）。
-- **Prisma 8 の `db sign`** は、DB の marker table に contract hash を書く。
+- **Prisma 8 の `db sign`**（2026-10 時点で release candidate）は、contract の hash を
+  DB の signature として記録する（PostgreSQL では `prisma_contract.marker`）。
   これは良い発想である。kofun-boot では次のようにする（[#51](https://github.com/kofun-lang/kofun-boot/issues/51)）。
   - DB が、自分の migrate された schema digest を持つ
   - binary は、起動時に自分の宣言 digest と比べて、違えば拒否する

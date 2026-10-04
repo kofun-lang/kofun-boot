@@ -3,10 +3,22 @@
 調査日: 2026-10-04。
 
 **出典の方針。** 各主張には一次資料を付けた。版と日付は、その日の npm・PyPI・GitHub
-の release で確かめた。一部の公式サイト（prisma.io、hexdocs.pm、docs.djangoproject.com
-など）には調査環境から直接届かなかった。そのため、同じ文書の GitHub 上の source を
-読んだ場合があり、そのときは両方の URL を挙げる。検索結果の要約にしか頼れなかった
-主張には **[要約のみ]** と付けた。
+の release で確かめた。
+
+調査環境の network policy は、一部の公式 doc site を拒否する（prisma.io、
+docs.djangoproject.com、docs.sqlalchemy.org、learn.microsoft.com、blog.jooq.org、
+engineering.fb.com、simonmar.github.io など）。そこで各 project が GitHub に置く
+doc の source（`prisma/docs`、`django/django/docs`、`sqlalchemy/sqlalchemy/doc`、
+`dotnet/EntityFramework.Docs`、`hibernate/hibernate-orm/documentation`、
+`Effect-TS/website`、`getsentry/sentry-docs` など）を読み、引用を確かめた。
+その URL を「(source)」として、公式 URL と並べて挙げる。
+
+GitHub にも一次資料が無い主張は二つある。
+
+- jOOQ の benchmark: GitHub 上の第三者の翻訳で数値を確かめた。
+- Sigma: 会議の abstract で確かめた。
+
+この二つは、そう明記した。
 
 他人の benchmark の数値は他人の測定であり、kofun-boot の bar ではない。
 
@@ -57,10 +69,13 @@ N+1 の原因は二つしかない。
     MySQL では相関 subquery を使い、一文になる。
   - `"query"`: table ごとに一文を発行し、application 側で結合する。
 - **状態。** `relationJoins` preview flag として 5.7.0（2023-12）から存在する。
-  v7 の文書でも、まだ Preview と書かれている **[要約のみ]**。
-- **組み込みの dataloader。** 「同じ tick で、同じ `where` と `include` を持つ
-  `findUnique()` を自動で batch する」。where がすべて同じ model の scalar field の
-  場合に限られる。
+  v7 の文書でもまだ Preview で、v7 の「Currently active Preview features」の表にも
+  載っている
+  （[source](https://github.com/prisma/docs/blob/main/apps/docs/content/docs/orm/v7/prisma-client/queries/relation-queries.mdx)、
+  [preview 一覧](https://github.com/prisma/docs/blob/main/apps/docs/content/docs/orm/v7/reference/preview-features/client-preview-features.mdx)）。
+- **組み込みの dataloader。** 「同じ tick で、同じ `select` と `where` を持つ
+  `findUnique()` を自動で batch する」
+  （[source](https://github.com/prisma/docs/blob/main/apps/docs/content/docs/orm/v7/prisma-client/queries/advanced/query-optimization-performance.mdx)）。
 - **失敗例。**
   - preview の feedback では、生成された lateral/JSON の SQL より素朴な `LEFT JOIN` の
     方が 2〜10 倍速かったという報告がある。
@@ -122,7 +137,9 @@ Statement"** は kofun-boot に最も近い立場なので、詳しく見る。
     する。
 - **Laravel。**
   - `Model::preventLazyLoading()` で lazy load を禁止できる。
-  - 12.x には `automaticallyEagerLoadRelationships()` がある。
+  - `automaticallyEagerLoadRelationships()` は framework v12.8.0（2025-04-08）で
+    入った。12.x の文書では beta と書かれている
+    （[source](https://github.com/laravel/docs/blob/12.x/eloquent-relationships.md)）。
 
 出典:
 [guide](https://guides.rubyonrails.org/active_record_querying.html#eager-loading-associations)、
@@ -213,16 +230,23 @@ Statement"** は kofun-boot に最も近い立場なので、詳しく見る。
 - **jOOQ の `MULTISET`（3.15〜）。** 標準 SQL の値構成子で、相関 subquery を
   collection として入れ子にする。対応していない方言では SQL/JSON や XML で emulate
   する。
-- **jOOQ 自身の benchmark（2022-06-09、PostgreSQL）[要約のみ]。**
+- **jOOQ 自身の benchmark「The Performance of Various To-Many Nesting
+  Algorithms」。** blog.jooq.org には届かなかった。数値は、原文 URL を明記した
+  GitHub 上の第三者の翻訳で確かめた
+  （[mirror](https://raw.githubusercontent.com/fru1tworld/cs-study/main/reference/article/jooq-blog/041-050.md)）。
+  投稿日（2022-06 上旬）は一次資料で確かめられていない。
 
-  | 方式 | 相対 throughput |
-  |---|---|
-  | join + client 側の重複除去 | 4413 |
-  | `MULTISET` JSONB | 2739 |
-  | 二 query | 2256 |
-  | N+1 | 265 |
+  | 方式 | MySQL、二重入れ子、一件に絞った場合 | MySQL、全件の場合 |
+  |---|---|---|
+  | join + client 側の重複除去 | 4413 | 266 |
+  | `MULTISET` JSONB | 2739 | 54 |
+  | `MULTISET` JSON | 2525 | 55 |
+  | 二 query | 2256 | 306 |
+  | N+1 | 265 | 1（基準） |
 
-  N+1 以外は同じ桁にあり、N+1 だけが一桁遅い。
+  一件に絞ると N+1 だけが一桁遅く、全件では二桁以上遅い。全件では二 query と join
+  が `MULTISET` の約 5 倍速い。どの方式が速いかは data の形で変わるが、N+1 が常に
+  最下位であることは変わらない。
 - **Kysely。** `jsonArrayFrom` で `json_agg` subquery を手で書く。
 - **Exposed。** `.with()` で一文の eager load をする。
 
@@ -289,8 +313,15 @@ Marlow、Brandy、Coens、Purdy の論文
 - **ApplicativeDo。**
   - GHC の拡張で、依存の無い `do` を `<*>` に脱糖し、並列性を引き出す。
   - Marlow、Peyton Jones、Kmett、Mokhov の論文（Haskell Symposium 2016）がある。
-- **実績。** Facebook の spam 対策 engine である Sigma が Haxl で書き直された
-  **[要約のみ]**。
+- **実績。** Facebook の spam 対策 engine である Sigma が、社内言語 FXL から
+  Haskell と Haxl で書き直され、毎秒 100 万 request 以上を処理している。
+  engineering.fb.com には届かなかったので、GitHub 上の CUFP 2015 の講演 abstract で
+  確かめた
+  （[CUFP 2015](https://raw.githubusercontent.com/CUFP/cufp.org/master/site/2015/2015-09-05_1400_1450_fighting-spam-with-haskell-at-facebook.md)）。
+- **source で確かめた仕組み。** `Monad.hs` の comment は次のとおり。
+  「The Applicative combinator '<*>' explores /both/ branches in the event that
+  the left branch is 'Blocked', so that we can collect multiple requests and
+  submit them as a batch.」
 
 出典:
 [paper](https://simonmar.github.io/bib/papers/haxl-icfp14.pdf)、

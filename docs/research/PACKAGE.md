@@ -83,9 +83,10 @@ gate は次のことを確かめる。
   - 型付き query
   - 宣言 cache
   - `Principal`
-- 調査環境の network policy で、一部の公式サイトには届かなかった。届かなかった場合
-  は、同じ文書の GitHub 上の source を読み、その URL を併記した。それも出来なかった
-  主張には、各文書で印を付けている。
+- 調査環境の network policy で、一部の公式サイトには届かなかった。その場合は、
+  同じ文書の GitHub 上の source を読み、その URL を併記した。GitHub にも一次資料が
+  無かった主張（Next.js blog、jOOQ blog、Sigma）は、第三者の mirror か会議の
+  abstract で確かめ、各文書でそう明記している。
 
 ## License
 

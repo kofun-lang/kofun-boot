@@ -3,10 +3,21 @@
 調査日: 2026-10-04。
 
 **出典の方針。** 版と日付は、その日の npm dist-tags、GitHub release、spring.io の
-blog で確かめた。いくつかの公式サイト（nextjs.org、prisma.io、orm.drizzle.team、
-docs.spring.io）には調査環境から直接届かなかった。そのため、同じ文書の GitHub 上の
-source を読んだ場合と、検索結果の要約にしか頼れなかった場合がある。後者には
-**[要約のみ]** と付けた。
+blog で確かめた。
+
+調査環境の network policy は、いくつかの公式サイト（nextjs.org、prisma.io、
+orm.drizzle.team、docs.spring.io）を拒否する。そこで、各 project が GitHub に置く
+doc の source を読んで引用を確かめた。
+
+- `vercel/next.js/docs`
+- `prisma/docs`
+- `drizzle-team/drizzle-orm-docs`
+- `spring-projects/*` の antora source
+
+その URL を「(source)」として、公式 URL と並べて挙げる。
+
+Next.js の blog だけは GitHub に source が無い。そこで、GitHub 上の第三者の
+mirror で文面を確かめ、mirror であることを明記した。
 
 [`SPRING_FASTAPI_GIN.md`](SPRING_FASTAPI_GIN.md)（2026-08-02）の続編であり、
 Spring Boot の基本的な判断はそちらにある。
@@ -81,8 +92,11 @@ Spring Boot の基本的な判断はそちらにある。
      丸ごと飛ばせた
      （[advisory](https://github.com/advisories/GHSA-f82v-jwr5-mffw)、
      [postmortem](https://vercel.com/blog/postmortem-on-next-js-middleware-bypass)）。
-   - 16 では `middleware.ts` が `proxy.ts` に改名された
-     （[message](https://nextjs.org/docs/messages/middleware-to-proxy)）。
+   - 16 では `middleware` という名前が非推奨になり、`proxy`（`proxy.ts`）に改名
+     された。`proxy` は Node.js でだけ動く。Edge で動かす場合は、非推奨のまま
+     `middleware.ts` が残る
+     （[upgrading to 16 (source)](https://github.com/vercel/next.js/blob/canary/docs/01-app/02-guides/upgrading/version-16.mdx)、
+     [message](https://nextjs.org/docs/messages/middleware-to-proxy)）。
    - kofun-boot は、framework の制御信号を利用者の入力と同じ channel に載せない。
      認可は、handler が引数として受け取る構成不能な値（`Principal`）にする。
 4. **推測された cache key。**
@@ -92,8 +106,17 @@ Spring Boot の基本的な判断はそちらにある。
      - 16 で `cacheComponents` と `"use cache"`、`cacheLife`、`cacheTag` の opt-in
        になった
        （[cacheComponents](https://raw.githubusercontent.com/vercel/next.js/canary/docs/01-app/03-api-reference/05-config/01-next-config-js/cacheComponents.mdx)）。
-   - Vercel 自身が「Our Journey with Caching」で既定値の失敗を認めている
-     （[blog](https://nextjs.org/blog/our-journey-with-caching)）。
+   - Next.js の blog「Our Journey with Caching」（Sebastian Markbåge、2024-10-24）は
+     次のように書いている。この post で実験的な `dynamicIO` が導入された。
+     「the developer experience suffered due to the caching defaults and controls
+     we provided」
+     （[blog](https://nextjs.org/blog/our-journey-with-caching)。nextjs.org は拒否さ
+     れたので、GitHub 上の
+     [mirror](https://raw.githubusercontent.com/xiaoyu2er/nextjs-i18n-docs/main/content/en/blog/our-journey-with-caching.mdx)
+     で確かめた）。
+   - 16 の `revalidateTag(tag, profile)` について。引数一つの形は、16.0.0 で削除では
+     なく非推奨になった。今の文書では TypeScript の error になる
+     （[revalidateTag at v16.0.0](https://raw.githubusercontent.com/vercel/next.js/v16.0.0/docs/01-app/03-api-reference/04-functions/revalidateTag.mdx)）。
    - それでも 2026-09-30 に次の advisory が出た
      （[advisories](https://github.com/vercel/next.js/security/advisories)）。
      - 入れ子の `"use cache"` で、root param の値をまたいで cache が漏れる
@@ -125,9 +148,17 @@ Spring Boot の基本的な判断はそちらにある。
   - 生成した client の出力先は、`node_modules` ではなく source の中になった。
     生成物は見える場所に置くべきだという判断であり、kofun-boot の
     `contracts/` と同じ考えである。
-- **Prisma 8 の contract と `db sign` [要約のみ]。**
+- **Prisma 8 の contract と `db sign`。** Prisma 8 は 2026-10-04 時点でまだ
+  release candidate で（npm の `latest` は `8.0.0-rc.19`）、GA は「2026 年 10 月の
+  見込み」である
+  （[release status (source)](https://github.com/prisma/docs/blob/main/apps/docs/content/docs/orm/release-status.mdx)）。
   - contract に content hash を持たせる。
-  - `db sign` で DB の marker table に書き込み、application と DB の整合を検査する
+  - `prisma contract emit` は contract の各部分に hash（`storageHash`、
+    `profileHash`）を付ける。`db sign` は、DB が contract を満たすことを確かめてから、
+    その hash を DB の「signature」として記録する。PostgreSQL では
+    `prisma_contract.marker` table の一行で、error code では marker と呼ばれる
+    （[contract (source)](https://github.com/prisma/docs/blob/main/apps/docs/content/docs/orm/contract-authoring/the-contract-artifact.mdx)）。
+  - これで application と DB の整合を検査する
     （[contract](https://www.prisma.io/docs/orm/v8/contract-authoring/the-contract-artifact)、
     [TS migrations](https://www.prisma.io/blog/typescript-migrations-in-prisma-next)）。
   - kofun-boot では「DB が自分の schema digest を持ち、binary が起動時に比べる」
@@ -181,8 +212,13 @@ Spring Boot の基本的な判断はそちらにある。
 
 ### 捨てるもの、その理由
 
-1. **rename の対話。** `drizzle-kit generate` は、rename か新規かを対話で尋ねる
-   （[generate](https://orm.drizzle.team/docs/drizzle-kit-generate)）。CI には答える人が
+1. **rename の対話。** `drizzle-kit generate` の文書は「prompt developer for renames
+   if necessary」と書く
+   （[generate (source)](https://github.com/drizzle-team/drizzle-orm-docs/blob/main/src/content/docs/pg/drizzle-kit-generate.mdx)）。
+   実際の問いは drizzle-kit の source にあり、「Is {column} column in {table} table
+   created or renamed from another column?」である
+   （[views.ts](https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-kit/src/cli/views.ts)）。
+   CI には答える人が
    いない。kofun-boot では rename は history に宣言された step である。
 2. **`push` による file 無しの同期。** 試作には速いが、history が残らない。
    kofun-boot の history は fold の入力そのものなので、省略できない。
@@ -220,7 +256,11 @@ Spring Boot の基本的な判断はそちらにある。
 - **Atlas。**
   - 宣言的な schema 管理（Terraform のように、現在と目標の差分を取る）と、
     versioned migration がある。
-  - `atlas.sum` は migration ごとの checksum を連鎖させて、編集を検出する
+  - `atlas.sum` は migration ごとの checksum と全体の sum を持つ。原文の言葉では
+    「a reverse, one branch merkle hash tree」で、編集を検出する。この文書は v0.29.0 で
+    ariga/atlas の repository から外れたので、v0.28.0 の版を引く
+    （[v0.28.0](https://raw.githubusercontent.com/ariga/atlas/v0.28.0/doc/md/concepts/migration-directory-integrity.md)、
+    [dir.go](https://github.com/ariga/atlas/blob/master/sql/migrate/dir.go)）
     （[integrity](https://atlasgo.io/concepts/migration-directory-integrity)）。
   - kofun-boot は、release ごとに history の prefix を固定する案として採る。
 - **sqlc と Kysely。**
