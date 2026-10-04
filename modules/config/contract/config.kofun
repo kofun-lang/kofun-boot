@@ -1,0 +1,81 @@
+# The canonical contract of the configuration bounded context.
+#
+# This surface is deliberately richer than the executable Stage 2 seed in
+# ../core/config.kofun: packs and keys are names, overrides are a list, and
+# each resolved field carries its source as a sum. The seed projects the same
+# decisions into a pack mask, three override slots, and integer codes.
+# tests/config/check.sh pins the correspondence of the outcome sum.
+#
+# The decisions, from R2 (#17):
+#
+#   A starter is a pure pack: a function from a field to the value it sets.
+#   There is no classpath to scan and no condition evaluated against
+#   ambient state, so what a pack does is what its source says.
+#
+#   Resolution is total and happens first. BootInput resolves to a complete
+#   ResolvedBoot, or to a refusal that names what it found, before anything
+#   else in a boot runs.
+#
+#   Every field carries its source. The base pack's defaults are printed by
+#   `boot explain` like everything else; a default nobody can see is a
+#   default nobody can reason about.
+#
+#   Precedence is fixed: the application's override, then a starter, then
+#   the base pack. Two starters that set one field to different values are
+#   refused, naming both, rather than one winning by load order.
+
+let CONFIG_CONTRACT_VERSION = 1
+
+type Source =
+    | Default(pack: Text)
+    | Pack(pack: Text)
+    | Override(file: Text, line: Int)
+
+type IntField = {
+    value: Int,
+    source: Source,
+}
+
+type TextField = {
+    value: Text,
+    source: Source,
+}
+
+type HttpMinimal = {
+    bind: TextField,
+    port: IntField,
+    body_limit: IntField,
+    drain_ms: IntField,
+    log_sink: TextField,
+}
+
+type ResolvedBoot = {
+    packs: List[Text],
+    http: HttpMinimal,
+}
+
+type Setting = {
+    key: Text,
+    value: Text,
+    line: Int,
+}
+
+type BootInput = {
+    packs: List[Text],
+    overrides: List[Setting],
+}
+
+type ConfigCheck =
+    | Accepted(packs: Int)
+    | UnknownPack(packs: Int)
+    | MissingBase(pack: Int)
+    | PackConflict(field: Int)
+    | UnknownKey(key: Int)
+    | DuplicateKey(key: Int)
+    | OutOfRange(key: Int)
+
+# The packs first, then the overrides; a refusal is a value, never an
+# exception thrown halfway through a boot.
+fn boot_resolve(input: BootInput) -> Result[ResolvedBoot, ConfigCheck] {
+    ...
+}

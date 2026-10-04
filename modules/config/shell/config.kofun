@@ -1,0 +1,149 @@
+# The configuration's imperative shell: check the application's input,
+# resolve it before anything else, and print the record and the probes.
+#
+# boot_input() is the application's boot.conf, compiled into a value by
+# scripts/boot-config.sh (./input.kofun). An input the check refuses stops
+# here: the shell prints the refusal, resolves nothing, and exits 1, so no
+# later step of a boot can run on a configuration with a hole in it.
+#
+# Every section opens with its name and closes with `end <name>`:
+#
+#   resolved  packs, then three lines per field in field order:
+#             value source reason
+#   refused   in place of resolved: kind payload conflicting, where
+#             conflicting is the mask of starter packs that disagree
+#   checks    a count, then four lines per probe input:
+#             number kind payload conflicting
+#   explains  a count, then, for each accepted probe, its number and its
+#             resolved record as above
+#
+# scripts/boot-explain.sh names every code; contracts/boot.explain is its
+# projection of the resolved section.
+
+fn emit_field(value: Int, source: Int, reason: Int) -> Int {
+    print(value)
+    print(source)
+    print(reason)
+    return 0
+}
+
+fn emit_resolved(resolved: ResolvedBoot) -> Int {
+    print(resolved.packs)
+    emit_field(resolved.bind_value, resolved.bind_source, resolved.bind_reason)
+    emit_field(resolved.port_value, resolved.port_source, resolved.port_reason)
+    emit_field(resolved.body_limit_value, resolved.body_limit_source, resolved.body_limit_reason)
+    emit_field(resolved.drain_ms_value, resolved.drain_ms_source, resolved.drain_ms_reason)
+    emit_field(resolved.log_sink_value, resolved.log_sink_source, resolved.log_sink_reason)
+    return 0
+}
+
+# The packs a refusal names: both sides of a conflict, and nothing for any
+# other refusal.
+fn named_packs(input: BootInput, verdict: ConfigCheck) -> Int {
+    if check_kind(verdict) == check_pack_conflict() {
+        return conflicting_packs(input, check_payload(verdict))
+    }
+    return 0
+}
+
+# Inputs the application does not use, each written for one verdict.
+fn scenario(number: Int) -> BootInput {
+    # The base pack alone: every field is its default.
+    if number == 1 {
+        return boot_input_of(pack_http_minimal(), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+    # One override. Its explanation differs from the defaults' in one line.
+    if number == 2 {
+        return boot_input_of(pack_http_minimal(), field_port(), 9090, 3, 0, 0, 0, 0, 0, 0)
+    }
+    # A starter sets two fields and leaves the rest to the base pack.
+    if number == 3 {
+        return boot_input_of(pack_http_minimal() + pack_http_strict(), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+    # An override beats the starter that set the same field.
+    if number == 4 {
+        return boot_input_of(
+            pack_http_minimal() + pack_http_strict(), field_body_limit(), 2048, 4,
+            0, 0, 0, 0, 0, 0
+        )
+    }
+    # Two starters set one field to different values.
+    if number == 5 {
+        return boot_input_of(
+            pack_http_minimal() + pack_http_strict() + pack_http_lenient(),
+            0, 0, 0, 0, 0, 0, 0, 0, 0
+        )
+    }
+    # A starter without the base pack would leave fields unset.
+    if number == 6 {
+        return boot_input_of(pack_http_strict(), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+    # A pack nobody defined.
+    if number == 7 {
+        return boot_input_of(16, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+    # A key the record does not have.
+    if number == 8 {
+        return boot_input_of(pack_http_minimal(), 9, 1, 2, 0, 0, 0, 0, 0, 0)
+    }
+    # One key set twice.
+    if number == 9 {
+        return boot_input_of(pack_http_minimal(), field_port(), 9090, 2, field_port(), 9091, 3, 0, 0, 0)
+    }
+    # A value the field cannot hold.
+    return boot_input_of(pack_http_minimal(), field_port(), 70000, 2, 0, 0, 0, 0, 0, 0)
+}
+
+fn emit_check_from(number: Int, last: Int) -> Int {
+    if number > last {
+        return 0
+    }
+    let input: BootInput = scenario(number)
+    let verdict: ConfigCheck = check(input)
+    print(number)
+    print(check_kind(verdict))
+    print(check_payload(verdict))
+    print(named_packs(input, verdict))
+    return emit_check_from(number + 1, last)
+}
+
+fn emit_explain(number: Int) -> Int {
+    print(number)
+    emit_resolved(resolve(scenario(number)))
+    return 0
+}
+
+fn main() -> Int {
+    print("kofun-boot config")
+    print("contract")
+    print(1)
+
+    # Resolution comes first. A refused input prints why and stops.
+    let input: BootInput = boot_input()
+    let verdict: ConfigCheck = check(input)
+    if check_kind(verdict) != check_accepted() {
+        print("refused")
+        print(check_kind(verdict))
+        print(check_payload(verdict))
+        print(named_packs(input, verdict))
+        print("end refused")
+        return 1
+    }
+    print("resolved")
+    emit_resolved(resolve(input))
+    print("end resolved")
+
+    print("checks")
+    print(10)
+    emit_check_from(1, 10)
+    print("end checks")
+
+    print("explains")
+    print(4)
+    emit_explain(1)
+    emit_explain(2)
+    emit_explain(3)
+    emit_explain(4)
+    print("end explains")
+    return 0
+}

@@ -50,6 +50,62 @@ jobs:
       - run: npm install -g typescript@5.9.3
       - run: sh tests/boot/check.sh
 
+  schema:
+    name: Schema — the history replays to the declaration, and SQL is a projection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sh tests/schema/check.sh
+
+  loader:
+    name: Loader — statements do not grow with N, and N+1 is refused by name
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sh tests/loader/check.sh
+
+  cache:
+    name: Cache — a key is the handler's arguments, and every served value is fresh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sh tests/cache/check.sh
+
+  config:
+    name: Config — resolution is a value, and boot explain accounts for every field
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sh tests/config/check.sh
+
+  schema-postgres:
+    name: PostgreSQL — the SQL projections build one database, and shapes cost the same at every N
+    runs-on: ubuntu-latest
+    env:
+      # The checks report SKIP on a machine without PostgreSQL. Here that
+      # would be a gate that is not running, so it is a failure instead.
+      SCHEMA_REQUIRE_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - name: Ensure PostgreSQL server binaries
+        run: |
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql
+          fi
+      - run: sh tests/schema/postgres.sh
+      - run: sh tests/loader/postgres.sh
+
   research-pack:
     name: Deterministic research ZIP
     runs-on: ubuntu-latest

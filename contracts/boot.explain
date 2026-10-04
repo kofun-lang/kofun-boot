@@ -1,0 +1,8 @@
+# kofun-boot resolved configuration, projected by scripts/boot-explain.sh
+# from the record the config binary printed. Regenerate; do not edit.
+packs            http_minimal http_strict
+http.bind        127.0.0.1  default   http_minimal
+http.port        9090       override  boot.conf:8
+http.body_limit  1024       pack      http_strict
+http.drain_ms    5000       pack      http_strict
+http.log_sink    stderr     default   http_minimal

@@ -64,6 +64,13 @@ for module in $modules; do
             hit=$(head -1 "$WORK/hit")
             fail "$source:${hit%%:*}: core constructs a capability: ${hit#*:}"
         fi
+        # A Principal is what the authentication adapter concluded about a
+        # credential it verified with a capability. A core that could build
+        # one could admit any caller it liked, so it may only receive one.
+        if grep -nE 'Principal\(' "$code" >"$WORK/hit"; then
+            hit=$(head -1 "$WORK/hit")
+            fail "$source:${hit%%:*}: core constructs a principal; only the shell's authentication adapter may: ${hit#*:}"
+        fi
         if grep -nE '^fn main' "$code" >"$WORK/hit"; then
             hit=$(head -1 "$WORK/hit")
             fail "$source:${hit%%:*}: core owns main; entry points belong to shell"

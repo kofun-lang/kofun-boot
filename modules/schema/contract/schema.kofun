@@ -1,0 +1,175 @@
+# The canonical contract of the schema bounded context.
+#
+# This surface is deliberately richer than the executable Stage 2 seed in
+# ../core/schema.kofun: a schema holds a List of tables, a name is Text, a
+# kind is a closed sum, and a migration is one constructor per step with only
+# the fields that step reads.  The seed projects the same decisions into two
+# tables of four fixed key slots and integer codes, without changing a single
+# outcome.  tests/schema/check.sh pins that correspondence constructor by
+# constructor.
+#
+# Three decisions shape everything here, and docs/architecture/DATA.md argues
+# each one:
+#
+#   A column's identity is its key, not its name.  A rename changes the name
+#   and keeps the key, so it is never inferred from a drop and an add; a drop
+#   retires the key, and a retired key is never reissued.
+#
+#   A migration history is a fold.  `schema_replay` is the shadow database:
+#   the schema a history produces is computed at build time, by a pure
+#   function, with no server.  Drift is a comparison of two values.
+#
+#   Data loss is a decision.  A step that can destroy data or fail on existing
+#   rows is refused unless it names the policy that makes it safe, and the
+#   planner never supplies one.
+#
+# A refused step is an answer, not an error, so SchemaOutcome is a closed sum
+# and every constructor carries what the rule observed.  A connection failure
+# while applying SQL is Result.Err at the adapter boundary and does not
+# belong here.
+
+let SCHEMA_CONTRACT_VERSION = 1
+
+type ColumnKey = {
+    value: Int,
+}
+
+type ColumnKind =
+    | BigInt
+    | Text
+    | Boolean
+    | Integer
+
+# A reference names the other table's key, never a column name, so renaming
+# the referenced column needs no migration of the referencing one.  It must
+# name that table's live primary key, of the same kind.
+type Reference = {
+    table: Text,
+    key: ColumnKey,
+}
+
+type Column = {
+    key: ColumnKey,
+    name: Text,
+    kind: ColumnKind,
+    nullable: Bool,
+    references: Option[Reference],
+}
+
+type Table = {
+    name: Text,
+    primary: ColumnKey,
+    columns: List[Column],
+    retired: List[ColumnKey],
+}
+
+type Schema = {
+    tables: List[Table],
+}
+
+type Dialect =
+    | Postgres
+
+# What makes a dangerous step safe.  A policy satisfies only the step that
+# asks for it: a Discard does not excuse a missing Backfill.
+type Policy =
+    | NoPolicy
+    | Discard
+    | Backfill(expression: SqlExpression)
+
+type Migration =
+    | CreateTable(table: Text, primary: Column)
+    | AddColumn(table: Text, column: Column, policy: Policy)
+    | RenameColumn(table: Text, key: ColumnKey, name: Text)
+    | DropColumn(table: Text, key: ColumnKey, policy: Policy)
+    | SetNullable(table: Text, key: ColumnKey, nullable: Bool, policy: Policy)
+    | AlterKind(table: Text, key: ColumnKey, kind: ColumnKind, policy: Policy)
+
+type SchemaOutcome =
+    | TableCreated(table: Int)
+    | ColumnAdded(key: Int)
+    | ColumnRenamed(key: Int)
+    | ColumnDropped(key: Int)
+    | NullabilityChanged(key: Int)
+    | TableExists(table: Int)
+    | NoTable(table: Int)
+    | KeyLive(key: Int)
+    | KeyRetired(key: Int)
+    | KeyUnknown(key: Int)
+    | NameTaken(label: Int)
+    | PrimaryKey(key: Int)
+    | Destructive(key: Int)
+    | NeedsBackfill(key: Int)
+    | Full(capacity: Int)
+    | KindChanged(key: Int)
+    | DanglingReference(key: Int)
+    | InReference(key: Int)
+
+type Drift =
+    | InSync(live: Int)
+    | Diverged(key: Int)
+
+type SchemaTransition = {
+    schema: Schema,
+    outcome: SchemaOutcome,
+}
+
+# A history that cannot be replayed names the step that was refused and the
+# answer it got, rather than replaying around it.
+type ReplayError = {
+    step: Int,
+    outcome: SchemaOutcome,
+}
+
+# One step, applied.  The order of the checks is part of the contract:
+# table, key range, key state, primary key, reference, name, policy.
+#
+# A kind change that widens (Integer to BigInt, any kind to Text from Integer,
+# BigInt, or Boolean) keeps every value and needs no policy; any other kind
+# change needs Discard, and cannot apply to a NOT NULL column, whose values
+# Discard would replace with null.  A column in a reference keeps its kind.
+fn schema_apply(
+    schema: Schema,
+    migration: Migration
+) -> SchemaTransition {
+    ...
+}
+
+# The shadow database: the schema a history produces, from nothing.
+fn schema_replay(
+    history: List[Migration]
+) -> Result[Schema, ReplayError] {
+    ...
+}
+
+fn schema_drift(
+    declared: Schema,
+    replayed: Schema
+) -> Drift {
+    ...
+}
+
+# The next migrations, decided by key.  Two different keys are never paired,
+# and no planned step carries a policy.
+fn schema_plan(
+    current: Schema,
+    desired: Schema
+) -> List[Migration] {
+    ...
+}
+
+# SQL is a projection of a value.  The same schema and dialect give the same
+# bytes, in every locale, time zone, and environment.
+fn schema_ddl(
+    schema: Schema,
+    dialect: Dialect
+) -> Text {
+    ...
+}
+
+fn schema_migration_sql(
+    history: List[Migration],
+    dialect: Dialect
+) -> Text {
+    ...
+}

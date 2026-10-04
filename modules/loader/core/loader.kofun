@@ -1,0 +1,541 @@
+# kofun-boot loader: N+1 as a property the gate can measure.
+#
+# The N+1 problem has two causes, and every ORM fix addresses one of them.
+#
+#   Lazy loading behind property access. `user.posts` looks like a field read
+#   and issues a query. Rails `strict_loading`, SQLAlchemy `raiseload`, and
+#   Ecto's `NotLoaded` all exist to turn that read into an error.
+#
+#   Sequencing that the data does not need. A loop that awaits one fetch per
+#   row runs N round trips although no fetch depends on another. Haxl showed
+#   that when the program's structure is visible before it runs, independent
+#   fetches can be gathered into one round and sent as one batch.
+#
+# kofun-boot has neither cause by construction. The core cannot perform I/O,
+# so there is no property that could load anything. And the core asks by
+# returning a `Cmd` — inert data — so the interpreter sees every fetch of a
+# round at once, before running any of them. Gathering a round is not an
+# Applicative instance or a DataLoader tick; it is reading a value.
+#
+# That leaves one way to write N+1: an update that deliberately waits for each
+# answer before asking for the next. It is legal and it is visible, because a
+# trace records every round. So N+1 becomes a measurement: run the same
+# request against N = 1..4 rows and require the statement count not to move.
+# tests/loader/check.sh does exactly that, and refuses a strategy whose
+# count grows with N by naming the counts.
+#
+# This file is the functional core: the coalescing rule the interpreter
+# applies to a round, and a small application — authors and their post
+# counts — written three ways. It may not construct a capability or own an
+# entry point; the database is held by the shell.
+
+# ------------------------------------------------------------- constants
+
+fn capacity() -> Int {
+    return 4
+}
+
+# Fetch sources. A source is what one SQL statement can answer: every fetch
+# of a round that names the same source is sent in that one statement.
+fn source_none() -> Int {
+    return 0
+}
+
+# All authors: `select id from authors order by id`.
+fn source_authors() -> Int {
+    return 1
+}
+
+# Post counts for a set of authors:
+# `select author_id, count(*) from posts where author_id = any($1) group by author_id`.
+fn source_posts_by_author() -> Int {
+    return 2
+}
+
+# Authors with their post counts, as one declared shape — the statement
+# Drizzle's relational queries and Prisma's `relationLoadStrategy: "join"`
+# compile a nested selection into: a lateral join with an aggregate.
+fn source_authors_with_counts() -> Int {
+    return 3
+}
+
+# The three ways the application is written.
+#
+#   1  per row, in sequence: wait for each author's count before asking for
+#      the next one. The await-in-a-loop shape. N + 1 statements.
+#   2  per row, in one round: ask for every author's count at once. The
+#      natural shape when an update maps over the rows it was given — and the
+#      interpreter coalesces the round into one statement. 2 statements.
+#   3  one declared shape: ask for authors with their counts. 1 statement.
+fn strategy_sequential() -> Int {
+    return 1
+}
+
+fn strategy_round() -> Int {
+    return 2
+}
+
+fn strategy_shape() -> Int {
+    return 3
+}
+
+# The strategy the application ships with. The gate holds it to the N+1 bar;
+# switching this to the sequential strategy is the break test.
+fn app_strategy() -> Int {
+    return 2
+}
+
+# A value meaning "not loaded yet". Counts are never negative, so the sentinel
+# cannot collide with an answer.
+fn unknown() -> Int {
+    return 0 - 1
+}
+
+# ---------------------------------------------------------------- values
+
+# One round of fetches: what the core asks for in one `Cmd`, up to four
+# fetches, each a source and a key. An empty slot has source 0.
+type Round = {
+    f1_source: Int,
+    f1_key: Int,
+    f2_source: Int,
+    f2_key: Int,
+    f3_source: Int,
+    f3_key: Int,
+    f4_source: Int,
+    f4_key: Int,
+}
+
+# What the interpreter will send for a round: one statement per distinct
+# source, and how many distinct keys the keyed statement carries.
+type Batch = {
+    statements: Int,
+    keys: Int,
+}
+
+# What a round taught the application. The interpreter fills the facts that
+# were asked for and leaves the rest unknown. `authors` is the author count —
+# the seed's authors are 1..authors — and `c1`..`c4` are post counts by
+# author id.
+type Answer = {
+    authors: Int,
+    c1: Int,
+    c2: Int,
+    c3: Int,
+    c4: Int,
+}
+
+# The request's progress, which is all the state the application keeps.
+type Progress = {
+    authors: Int,
+    c1: Int,
+    c2: Int,
+    c3: Int,
+    c4: Int,
+}
+
+# Whether a request finished, and how. `Loaded` carries the total post count
+# so every strategy can be checked for the same answer; `Stalled` carries the
+# round at which the request stopped asking without having its answer, which
+# is a defect in the application rather than a refusal.
+type LoadOutcome =
+    | Loaded(posts: Int)
+    | Stalled(round: Int)
+
+# ------------------------------------------------------------ constructors
+
+fn eq(left: Int, right: Int) -> Int {
+    if left == right {
+        return 1
+    }
+    return 0
+}
+
+fn positive(value: Int) -> Int {
+    if value > 0 {
+        return 1
+    }
+    return 0
+}
+
+fn empty_round() -> Round {
+    let round: Round = Round(
+        f1_source: source_none(),
+        f1_key: 0,
+        f2_source: source_none(),
+        f2_key: 0,
+        f3_source: source_none(),
+        f3_key: 0,
+        f4_source: source_none(),
+        f4_key: 0
+    )
+    return round
+}
+
+fn round_of(
+    s1: Int, k1: Int,
+    s2: Int, k2: Int,
+    s3: Int, k3: Int,
+    s4: Int, k4: Int
+) -> Round {
+    let round: Round = Round(
+        f1_source: s1,
+        f1_key: k1,
+        f2_source: s2,
+        f2_key: k2,
+        f3_source: s3,
+        f3_key: k3,
+        f4_source: s4,
+        f4_key: k4
+    )
+    return round
+}
+
+fn single(source: Int, key: Int) -> Round {
+    return round_of(source, key, 0, 0, 0, 0, 0, 0)
+}
+
+fn fresh() -> Progress {
+    let progress: Progress = Progress(
+        authors: unknown(),
+        c1: unknown(),
+        c2: unknown(),
+        c3: unknown(),
+        c4: unknown()
+    )
+    return progress
+}
+
+fn fetch_count(round: Round) -> Int {
+    return positive(round.f1_source)
+        + positive(round.f2_source)
+        + positive(round.f3_source)
+        + positive(round.f4_source)
+}
+
+fn is_empty(round: Round) -> Int {
+    return eq(fetch_count(round), 0)
+}
+
+# ----------------------------------------------------------- coalescing
+#
+# The interpreter's rule, and the whole of DataLoader's batching contract
+# without the event-loop tick it needs to find a batch: every fetch of a
+# round that names the same source travels in one statement, and a key asked
+# for twice in that statement is sent once. The round is a value, so the
+# interpreter does not wait to see what else will be asked. It already knows.
+
+fn names_source(round: Round, source: Int) -> Int {
+    let hits: Int = eq(round.f1_source, source)
+        + eq(round.f2_source, source)
+        + eq(round.f3_source, source)
+        + eq(round.f4_source, source)
+    return positive(hits)
+}
+
+# Whether fetch slot `slot` carries a key that an earlier slot of the same
+# source already carries. Written as a fixed sum, so the answer does not
+# depend on the order the slots were filled in.
+fn repeats(round: Round, slot: Int) -> Int {
+    if slot == 2 {
+        return eq(round.f2_source, round.f1_source) * eq(round.f2_key, round.f1_key)
+            * positive(round.f2_source)
+    }
+    if slot == 3 {
+        return positive(
+            eq(round.f3_source, round.f1_source) * eq(round.f3_key, round.f1_key)
+                + eq(round.f3_source, round.f2_source) * eq(round.f3_key, round.f2_key)
+        ) * positive(round.f3_source)
+    }
+    if slot == 4 {
+        return positive(
+            eq(round.f4_source, round.f1_source) * eq(round.f4_key, round.f1_key)
+                + eq(round.f4_source, round.f2_source) * eq(round.f4_key, round.f2_key)
+                + eq(round.f4_source, round.f3_source) * eq(round.f4_key, round.f3_key)
+        ) * positive(round.f4_source)
+    }
+    return 0
+}
+
+# Distinct keys sent for the keyed source. Only posts-by-author takes keys;
+# the other sources are whole-table reads.
+fn distinct_keys(round: Round) -> Int {
+    return eq(round.f1_source, source_posts_by_author())
+        + eq(round.f2_source, source_posts_by_author()) * (1 - repeats(round, 2))
+        + eq(round.f3_source, source_posts_by_author()) * (1 - repeats(round, 3))
+        + eq(round.f4_source, source_posts_by_author()) * (1 - repeats(round, 4))
+}
+
+fn coalesce(round: Round) -> Batch {
+    let batch: Batch = Batch(
+        statements: names_source(round, source_authors())
+            + names_source(round, source_posts_by_author())
+            + names_source(round, source_authors_with_counts()),
+        keys: distinct_keys(round)
+    )
+    return batch
+}
+
+# ------------------------------------------------------ the application
+#
+# One request: every author, with how many posts each has written. The answer
+# is the same whichever strategy asks for it; what differs is how many round
+# trips the asking costs, and only the trace can show that.
+
+fn count_of(progress: Progress, author: Int) -> Int {
+    return eq(author, 1) * progress.c1
+        + eq(author, 2) * progress.c2
+        + eq(author, 3) * progress.c3
+        + eq(author, 4) * progress.c4
+}
+
+fn known(value: Int) -> Int {
+    if value == unknown() {
+        return 0
+    }
+    return 1
+}
+
+# Whether author `author` still needs a count: it exists and none is known.
+fn missing(progress: Progress, author: Int) -> Int {
+    if author > progress.authors {
+        return 0
+    }
+    return 1 - known(count_of(progress, author))
+}
+
+fn missing_count(progress: Progress) -> Int {
+    return missing(progress, 1)
+        + missing(progress, 2)
+        + missing(progress, 3)
+        + missing(progress, 4)
+}
+
+# The first author without a count, or 0.
+fn first_missing(progress: Progress) -> Int {
+    if missing(progress, 1) == 1 {
+        return 1
+    }
+    if missing(progress, 2) == 1 {
+        return 2
+    }
+    if missing(progress, 3) == 1 {
+        return 3
+    }
+    if missing(progress, 4) == 1 {
+        return 4
+    }
+    return 0
+}
+
+fn done(progress: Progress) -> Int {
+    if known(progress.authors) == 0 {
+        return 0
+    }
+    return eq(missing_count(progress), 0)
+}
+
+# A posts-by-author fetch for `author` when that author still needs one, and
+# an empty slot otherwise. Mapping this over the authors is how strategy 2
+# builds its round — the way an update maps over the rows it was handed.
+fn posts_source_for(progress: Progress, author: Int) -> Int {
+    return missing(progress, author) * source_posts_by_author()
+}
+
+fn posts_key_for(progress: Progress, author: Int) -> Int {
+    return missing(progress, author) * author
+}
+
+# The next `Cmd`: what the application asks for, given what it knows. An empty
+# round means it has asked for everything it needs.
+fn next_round(strategy: Int, progress: Progress) -> Round {
+    if done(progress) == 1 {
+        return empty_round()
+    }
+    if strategy == strategy_shape() {
+        return single(source_authors_with_counts(), 0)
+    }
+    if known(progress.authors) == 0 {
+        return single(source_authors(), 0)
+    }
+    if strategy == strategy_sequential() {
+        return single(source_posts_by_author(), first_missing(progress))
+    }
+    return round_of(
+        posts_source_for(progress, 1), posts_key_for(progress, 1),
+        posts_source_for(progress, 2), posts_key_for(progress, 2),
+        posts_source_for(progress, 3), posts_key_for(progress, 3),
+        posts_source_for(progress, 4), posts_key_for(progress, 4)
+    )
+}
+
+fn merge(old: Int, learned: Int) -> Int {
+    if known(learned) == 1 {
+        return learned
+    }
+    return old
+}
+
+# The `Msg`: what a round taught the application, folded into its progress.
+fn absorb(progress: Progress, answer: Answer) -> Progress {
+    let next: Progress = Progress(
+        authors: merge(progress.authors, answer.authors),
+        c1: merge(progress.c1, answer.c1),
+        c2: merge(progress.c2, answer.c2),
+        c3: merge(progress.c3, answer.c3),
+        c4: merge(progress.c4, answer.c4)
+    )
+    return next
+}
+
+fn total_posts(progress: Progress) -> Int {
+    return positive(progress.c1 + 1) * progress.c1
+        + positive(progress.c2 + 1) * progress.c2
+        + positive(progress.c3 + 1) * progress.c3
+        + positive(progress.c4 + 1) * progress.c4
+}
+
+fn outcome(progress: Progress, rounds: Int) -> LoadOutcome {
+    if done(progress) == 1 {
+        return Loaded(total_posts(progress))
+    }
+    return Stalled(rounds)
+}
+
+fn outcome_kind(result: LoadOutcome) -> Int {
+    let mut kind = 0
+    match result {
+        Loaded(_) => { kind = 1 },
+        Stalled(_) => { kind = 2 },
+    }
+    return kind
+}
+
+fn outcome_payload(result: LoadOutcome) -> Int {
+    let mut payload = 0
+    match result {
+        Loaded(posts) => { payload = posts },
+        Stalled(round) => { payload = round },
+    }
+    return payload
+}
+
+# ------------------------------------------------------------ detection
+#
+# The N+1 bar, as a function: the statements a request costs at the smallest
+# and the largest N must be equal. A count that grows with N is a count that
+# will grow with production data, whatever it is in a test with three rows.
+# Django's assertNumQueries pins one number for one fixture; this pins that
+# the number does not depend on the fixture's size.
+
+fn grows_with_n(at_smallest: Int, at_largest: Int) -> Int {
+    if at_largest > at_smallest {
+        return 1
+    }
+    return 0
+}
+
+# ---------------------------------------------------------------- shapes
+#
+# A declared shape is a nested read written once, as a value, and compiled at
+# build time to a number of statements that is a property of the shape and
+# never of the data. Two ways to load its relation:
+#
+#   join   one statement: the relation is a LEFT JOIN LATERAL subquery that
+#          aggregates the child rows into JSON — what Drizzle's relational
+#          queries, Prisma's relationLoadStrategy "join", Hasura, and PostgREST
+#          embedding all compile to.
+#   split  one statement per level: the roots, then every child of every root
+#          in one `= any($1)` statement. Chosen per relation when joining
+#          sibling collections would multiply rows.
+#
+# The target dialect is a capability, not an assumption. A join on a dialect
+# without LATERAL is refused at build time, naming the relation, instead of
+# silently falling back to something with a different statement count.
+# Prisma 8 makes the same choice for its `includeMany`.
+
+fn relation_posts() -> Int {
+    return 1
+}
+
+fn table_authors() -> Int {
+    return 1
+}
+
+fn load_join() -> Int {
+    return 1
+}
+
+fn load_split() -> Int {
+    return 2
+}
+
+fn dialect_postgresql() -> Int {
+    return 1
+}
+
+fn dialect_sqlite() -> Int {
+    return 2
+}
+
+# Authors, each with the ids of their posts.
+type Shape = {
+    root: Int,
+    relation: Int,
+    load: Int,
+}
+
+# What a target can compile. Only LATERAL is modelled; a dialect is a record so
+# the next capability is a field, not a new branch in every caller.
+type Dialect = {
+    name: Int,
+    lateral: Int,
+}
+
+type ShapeOutcome =
+    | Compiled(statements: Int)
+    | NeedsLateral(relation: Int)
+
+fn shape(load: Int) -> Shape {
+    let declared: Shape = Shape(root: table_authors(), relation: relation_posts(), load: load)
+    return declared
+}
+
+fn dialect(name: Int) -> Dialect {
+    let mut lateral = 0
+    if name == dialect_postgresql() {
+        lateral = 1
+    }
+    let target: Dialect = Dialect(name: name, lateral: lateral)
+    return target
+}
+
+# A shape of one relation level. A join is one statement; a split is one per
+# level, the roots and then the relation.
+fn compile_shape(declared: Shape, target: Dialect) -> ShapeOutcome {
+    if declared.load == load_join() {
+        if target.lateral == 0 {
+            return NeedsLateral(declared.relation)
+        }
+        return Compiled(1)
+    }
+    return Compiled(2)
+}
+
+fn shape_outcome_kind(result: ShapeOutcome) -> Int {
+    let mut kind = 0
+    match result {
+        Compiled(_) => { kind = 1 },
+        NeedsLateral(_) => { kind = 2 },
+    }
+    return kind
+}
+
+fn shape_outcome_payload(result: ShapeOutcome) -> Int {
+    let mut payload = 0
+    match result {
+        Compiled(statements) => { payload = statements },
+        NeedsLateral(relation) => { payload = relation },
+    }
+    return payload
+}

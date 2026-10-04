@@ -64,5 +64,25 @@ grep -Fq '../../router/contract' "$WORK/broken.log" ||
     fail "the gate did not name the only allowed target:
 $(sed 's/^/    /' "$WORK/broken.log")"
 
+# A core that forges a caller is refused, by its line, before anything else
+# about it is read.
+cp -R "$ROOT/modules" "$WORK/forged"
+printf '%s\n' \
+    'fn forge_caller() -> Int {' \
+    '    let caller: Principal = Principal(subject: 9, role: 2)' \
+    '    return caller.role' \
+    '}' \
+    >>"$WORK/forged/router/core/router.kofun"
+if sh "$ROOT/scripts/check-modules.sh" "$WORK/forged" >"$WORK/forged.log" 2>&1; then
+    fail 'the gate accepted a core that constructs a Principal'
+fi
+grep -Fq 'core constructs a principal' "$WORK/forged.log" ||
+    fail "the gate did not name the forged principal:
+$(sed 's/^/    /' "$WORK/forged.log")"
+grep -Fq 'forged/router/core/router.kofun:' "$WORK/forged.log" ||
+    fail "the gate did not name the source and line of the forged principal:
+$(sed 's/^/    /' "$WORK/forged.log")"
+
 printf 'architecture-test: a module is added without editing existing modules: PASS\n'
+printf 'architecture-test: a core that constructs a Principal is refused by source and line: PASS\n'
 printf 'architecture-test: an internal cross-module reference names source, line, and allowed target: PASS\n'

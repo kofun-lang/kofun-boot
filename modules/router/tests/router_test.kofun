@@ -360,3 +360,86 @@ fn test_handlers_do_not_share_state() -> Int {
     failures = failures + expect_eq_int(b.body_code, 106)
     return failures
 }
+
+# ------------------------------------------------------------- admission
+#
+# Tests may build a Principal: they stand where the authentication adapter
+# stands. The core may not, and the architecture gate says so by line.
+
+fn caller(role: Int) -> Principal {
+    let built: Principal = Principal(subject: 3, role: role)
+    return built
+}
+
+fn admitted(method: Int, path: Int, body: Int, role: Int) -> Admission {
+    let table: RouteTable = boot_table()
+    return admit(table, dispatch(table, request_at(method, path, body)), caller(role))
+}
+
+fn test_a_public_route_admits_an_anonymous_caller() -> Int {
+    let admission: Admission = admitted(method_get(), path_hello(), 0, role_public())
+    let mut failures = 0
+    failures = failures + expect_eq_int(admission_kind(admission), admission_admitted())
+    failures = failures + expect_eq_int(admission_payload(admission), 1)
+    failures = failures + expect_eq_int(admission_status(admission), 200)
+    return failures
+}
+
+fn test_a_protected_route_without_a_caller_is_unauthenticated() -> Int {
+    let admission: Admission = admitted(method_post(), path_sum(), 0, role_public())
+    let mut failures = 0
+    failures = failures + expect_eq_int(admission_kind(admission), admission_unauthenticated())
+    failures = failures + expect_eq_int(admission_payload(admission), 2)
+    failures = failures + expect_eq_int(admission_status(admission), 401)
+    return failures
+}
+
+fn test_a_caller_below_the_route_is_forbidden_naming_the_role() -> Int {
+    let admission: Admission = admitted(
+        method_get(), path_thing() * capture_base() + 7, 0, role_member()
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(admission_kind(admission), admission_forbidden())
+    failures = failures + expect_eq_int(admission_payload(admission), role_admin())
+    failures = failures + expect_eq_int(admission_status(admission), 403)
+    return failures
+}
+
+fn test_a_higher_role_is_admitted_to_a_lower_route() -> Int {
+    let admission: Admission = admitted(method_post(), path_sum(), 0, role_admin())
+    return expect_eq_int(admission_kind(admission), admission_admitted())
+}
+
+# The order: size before route before method before the caller. An oversized
+# request to a protected route is refused for its size, and learns nothing
+# about whether the route needed a caller.
+fn test_earlier_refusals_pass_through_before_the_caller_is_read() -> Int {
+    let oversized: Admission = admitted(method_post(), path_sum(), 4097, role_public())
+    let wrong_method: Admission = admitted(method_get(), path_sum(), 0, role_public())
+    let unknown: Admission = admitted(method_get(), 999, 0, role_public())
+    let mut failures = 0
+    failures = failures + expect_eq_int(admission_kind(oversized), admission_not_routed())
+    failures = failures + expect_eq_int(admission_status(oversized), 413)
+    failures = failures + expect_eq_int(admission_status(wrong_method), 405)
+    failures = failures + expect_eq_int(admission_status(unknown), 404)
+    return failures
+}
+
+fn test_no_admission_is_a_server_error() -> Int {
+    let mut failures = 0
+    failures = failures + expect_lt_int(admission_status(admitted(method_post(), path_sum(), 0, role_public())), 500)
+    failures = failures + expect_lt_int(admission_status(admitted(method_get(), path_thing() * capture_base() + 7, 0, role_member())), 500)
+    failures = failures + expect_lt_int(admission_status(admitted(method_post(), path_sum(), 4097, role_public())), 500)
+    return failures
+}
+
+fn test_a_handler_that_needs_a_caller_reads_it() -> Int {
+    let response: Response = handle_thing(
+        request_at(method_get(), path_thing() * capture_base() + 7, 0),
+        caller(role_admin())
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(response.status, 200)
+    failures = failures + expect_eq_int(response.body_code, 7003)
+    return failures
+}

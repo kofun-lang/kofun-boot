@@ -1,0 +1,133 @@
+# The cache's imperative shell: print the declarations, the build-time
+# verdicts, the probes, and the trace of one session.
+#
+# Nothing here decides anything. Every section opens with its name and
+# closes with `end <name>`, and tests/cache/check.sh reads each by name:
+#
+#   caches   a count, then five lines per read endpoint:
+#            read args key lifetime tags
+#   writes   a count, then two lines per write: write invalidates
+#   check    a count, then three lines per read endpoint: read kind payload,
+#            where kind 1 is Sound and every other kind is a refusal
+#   probes   a count, then eight lines per probe — a declaration the check
+#            must judge, and its verdict:
+#            read args key lifetime tags covered kind payload
+#   trace    a count, then eleven lines per call of the session:
+#            step op id value caller now event payload fresh removed live
+#            where fresh is what the read returns with no cache in front of
+#            it, removed is what a write dropped or a miss evicted, and live
+#            is the entries held afterwards
+#
+# scripts/cache-manifest.sh projects the caches and writes sections into
+# contracts/caches.txt, the manifest rows an operator reads.
+
+fn emit_cache(read: Int) -> Int {
+    let declared: Cache = cache_of(read)
+    print(declared.read)
+    print(read_args(read))
+    print(declared.key)
+    print(declared.lifetime)
+    print(declared.tags)
+    return 0
+}
+
+fn emit_write(write: Int) -> Int {
+    let declared: Write = write_of(write)
+    print(declared.write)
+    print(declared.invalidates)
+    return 0
+}
+
+fn emit_check(read: Int) -> Int {
+    let verdict: CacheCheck = check_read(read)
+    print(read)
+    print(check_kind(verdict))
+    print(check_payload(verdict))
+    return 0
+}
+
+fn emit_probe(declared: Cache, args: Int, covered: Int) -> Int {
+    let verdict: CacheCheck = check(declared, args, covered)
+    print(declared.read)
+    print(args)
+    print(declared.key)
+    print(declared.lifetime)
+    print(declared.tags)
+    print(covered)
+    print(check_kind(verdict))
+    print(check_payload(verdict))
+    return 0
+}
+
+# The fold, printed as it goes. Each call reads the entries and the data the
+# step before it left, the way modules/mock's session reads its store.
+fn emit_session_from(number: Int, last: Int, entries: Entries, things: Things) -> Int {
+    if number > last {
+        return 0
+    }
+    let call: Call = session_call(number)
+    let event: CacheEvent = event_of(entries, things, call)
+    let after: Entries = entries_after(entries, things, call)
+    print(number)
+    print(call.op)
+    print(call.id)
+    print(call.value)
+    print(call.caller)
+    print(call.now)
+    print(event_kind(event))
+    print(event_payload(event))
+    print(fresh(things, call))
+    print(removed(entries, call))
+    print(live_entries(after))
+    return emit_session_from(number + 1, last, after, things_after(things, call))
+}
+
+fn main() -> Int {
+    print("kofun-boot cache")
+    print("contract")
+    print(1)
+
+    print("caches")
+    print(3)
+    emit_cache(op_list())
+    emit_cache(op_show())
+    emit_cache(op_mine())
+    print("end caches")
+
+    print("writes")
+    print(2)
+    emit_write(op_put())
+    emit_write(op_give())
+    print("end writes")
+
+    print("check")
+    print(3)
+    emit_check(op_list())
+    emit_check(op_show())
+    emit_check(op_mine())
+    print("end check")
+
+    # Declarations the application does not make, each judged by the same
+    # check, so every refusal is shown to fire.
+    print("probes")
+    print(5)
+    # The leak: a per-caller answer under a key without the caller.
+    emit_probe(cache(op_mine(), arg_id(), 30, tag_thing()), arg_id() + arg_caller(), covered_tags())
+    # A key that names an argument the handler never receives.
+    emit_probe(cache(op_list(), arg_caller(), 60, tag_things()), 0, covered_tags())
+    # A cache that never expires, under a tag no write drops.
+    emit_probe(cache(op_show(), arg_id(), lifetime_forever(), tag_thing()), arg_id(), tag_things())
+    # A cache that never expires and carries no tag at all.
+    emit_probe(cache(op_show(), arg_id(), lifetime_forever(), 0), arg_id(), covered_tags())
+    # The same uncovered tag is sound under a finite lifetime, which bounds
+    # how stale the entry can get.
+    emit_probe(cache(op_mine(), arg_id() + arg_caller(), 30, tag_thing()), arg_id() + arg_caller(), 0)
+    print("end probes")
+
+    print("trace")
+    print(session_length())
+    emit_session_from(1, session_length(), no_entries(), seeded_things())
+    print("end trace")
+
+    return 0
+}

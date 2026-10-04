@@ -1,0 +1,8 @@
+# Released migration steps: step, digest of its executable SQL in
+# contracts/migrations.sql, and the version that released it.
+#
+# Appended by `sh scripts/migrations-lock.sh release <version>` when a version
+# is tagged (docs/RELEASING.md); never edited by hand. tests/release/check.sh
+# refuses a released step whose SQL changed or disappeared.
+#
+# No version has shipped the schema module yet, so no step is released.

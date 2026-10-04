@@ -1,0 +1,108 @@
+# The canonical contract of the loader bounded context.
+#
+# This surface is deliberately richer than the executable Stage 2 seed in
+# ../core/loader.kofun: a round is a List of fetches, a source is a closed
+# sum that names its statement, and a batch carries the keys it sends.  The
+# seed projects the same decisions into four fixed fetch slots and integer
+# codes.  tests/loader/check.sh pins the correspondence of the outcome sum.
+#
+# The decisions, argued in docs/research/N_PLUS_ONE.md and
+# docs/architecture/DATA.md:
+#
+#   Nothing loads behind a field read.  A row is a record; there is no
+#   property that can issue a query, so the lazy-loading cause of N+1 does
+#   not exist and needs no `strict_loading` switch to turn off.
+#
+#   A round is a value.  The core asks by returning every fetch it wants now,
+#   and the interpreter coalesces them before running any: one statement per
+#   source, each key sent once.  That is Haxl's batching and DataLoader's
+#   contract without an Applicative instance or an event-loop tick, because
+#   the interpreter does not have to wait to see what else will be asked.
+#
+#   Round trips are measured, not hoped for.  A trace records every round, so
+#   the statements a request costs are a number the gate reads at several
+#   sizes of the same data.  A count that grows with N fails by name.
+
+let LOADER_CONTRACT_VERSION = 1
+
+# What one statement can answer.  A keyed source carries the keys it was
+# asked for; a declared shape is a nested selection compiled ahead of time
+# into one statement, the way a relational query with `with` or `include`
+# compiles into a lateral join with an aggregate.
+type Source =
+    | Table(name: Text)
+    | ByKey(table: Text, column: Text)
+    | Shape(name: Text)
+
+type Fetch = {
+    source: Source,
+    key: Int,
+}
+
+type Round = {
+    fetches: List[Fetch],
+}
+
+type Statement = {
+    source: Source,
+    keys: List[Int],
+}
+
+type Batch = {
+    statements: List[Statement],
+}
+
+type LoadOutcome =
+    | Loaded(posts: Int)
+    | Stalled(round: Int)
+
+# The interpreter's rule: same source, one statement; same key, sent once.
+# Total, pure, and independent of the order the fetches were listed in.
+fn loader_coalesce(round: Round) -> Batch {
+    ...
+}
+
+# The N+1 bar.  `counts` is the statements one request cost at increasing
+# sizes of the same data; the bar holds when the count does not grow.
+fn loader_scales(counts: List[Int]) -> Bool {
+    ...
+}
+
+# A declared nested read.  `Join` compiles the relation into one statement
+# (LEFT JOIN LATERAL with a JSON aggregate); `Split` compiles one statement
+# per level.  The choice is per relation, because joining sibling collections
+# multiplies rows.
+type Load =
+    | Join
+    | Split
+
+type Relation = {
+    name: Text,
+    table: Text,
+    foreign_key: Text,
+    load: Load,
+}
+
+type Shape = {
+    root: Text,
+    relations: List[Relation],
+}
+
+# What the target dialect can compile.  A missing capability is a build-time
+# refusal naming the relation, never a silent fallback with a different
+# statement count.
+type DialectCapabilities = {
+    lateral: Bool,
+    json_agg: Bool,
+}
+
+type ShapeOutcome =
+    | Compiled(statements: Int)
+    | NeedsLateral(relation: Int)
+
+fn loader_compile_shape(
+    shape: Shape,
+    dialect: DialectCapabilities
+) -> ShapeOutcome {
+    ...
+}

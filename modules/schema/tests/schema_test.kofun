@@ -1,0 +1,432 @@
+# Unit tests for the schema core.
+#
+# Read them as the migrations a developer actually writes — create a table,
+# add a column, rename one, tighten one, drop one — with the two questions a
+# migration tool is normally unable to answer without a database: what schema
+# does this history produce, and does it match the one the code declares?
+# Here both are function calls.
+
+# ---------------------------------------------------------------- tables
+
+fn test_create_table_makes_its_primary_key_live_and_not_null() -> Int {
+    let step: SchemaStep = apply_alone(empty_schema(), history_step(1))
+    let schema: Schema = step_schema(step)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_table_created())
+    failures = failures + expect_eq_int(payload_of(step), table_users())
+    failures = failures + expect_eq_int(schema.primary, 1)
+    failures = failures + expect_eq_int(is_live(schema, 1), 1)
+    failures = failures + expect_eq_int(nullable_at(schema, 1), 0)
+    failures = failures + expect_eq_int(live_count(schema), 1)
+    return failures
+}
+
+# A primary key is never nullable, whatever the step claims.
+fn test_a_primary_key_ignores_a_nullable_request() -> Int {
+    let step: SchemaStep = apply_alone(empty_schema(), migration(
+        step_create_table(), table_users(), 1, label_id(), kind_bigint(), 1,
+        policy_none()
+    ))
+    return expect_eq_int(nullable_at(step_schema(step), 1), 0)
+}
+
+fn test_a_column_before_its_table_is_refused() -> Int {
+    let step: SchemaStep = apply_alone(empty_schema(), add(2, label_email(), 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_no_table())
+    failures = failures + expect_eq_int(payload_of(step), table_users())
+    failures = failures + expect_eq_int(live_count(step_schema(step)), 0)
+    return failures
+}
+
+fn test_a_step_naming_another_table_is_refused_with_that_table() -> Int {
+    let step: SchemaStep = apply_alone(users_table(), migration(
+        step_add_column(), 9, 2, label_email(), kind_text(), 1, policy_none()
+    ))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_no_table())
+    failures = failures + expect_eq_int(payload_of(step), 9)
+    return failures
+}
+
+fn test_a_second_create_table_names_the_table_that_exists() -> Int {
+    let step: SchemaStep = apply_alone(users_table(), history_step(1))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_table_exists())
+    failures = failures + expect_eq_int(payload_of(step), table_users())
+    return failures
+}
+
+# --------------------------------------------------------------- columns
+
+fn test_a_nullable_column_is_added_at_its_key() -> Int {
+    let step: SchemaStep = apply_alone(users_table(), add(2, label_email(), 1, policy_none()))
+    let schema: Schema = step_schema(step)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_column_added())
+    failures = failures + expect_eq_int(payload_of(step), 2)
+    failures = failures + expect_eq_int(label_at(schema, 2), label_email())
+    failures = failures + expect_eq_int(nullable_at(schema, 2), 1)
+    return failures
+}
+
+# The table exists, so it may hold rows; a NOT NULL column needs a value for
+# them before the step can be applied safely.
+fn test_a_not_null_column_needs_a_backfill() -> Int {
+    let refused: SchemaStep = apply_alone(users_table(), add(2, label_email(), 0, policy_none()))
+    let accepted: SchemaStep = apply_alone(users_table(), add(2, label_email(), 0, policy_backfilled()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(refused), outcome_needs_backfill())
+    failures = failures + expect_eq_int(payload_of(refused), 2)
+    failures = failures + expect_eq_int(live_count(step_schema(refused)), 1)
+    failures = failures + expect_eq_int(kind_of(accepted), outcome_column_added())
+    failures = failures + expect_eq_int(nullable_at(step_schema(accepted), 2), 0)
+    return failures
+}
+
+# A discard policy is not a backfill: a policy satisfies only the step that
+# asks for it.
+fn test_the_wrong_policy_does_not_satisfy_a_backfill() -> Int {
+    let step: SchemaStep = apply_alone(users_table(), add(2, label_email(), 0, policy_discard()))
+    return expect_eq_int(kind_of(step), outcome_needs_backfill())
+}
+
+fn test_an_add_at_a_live_key_is_a_collision_not_an_update() -> Int {
+    let step: SchemaStep = apply_alone(with_email(), add(2, label_name(), 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_key_live())
+    failures = failures + expect_eq_int(payload_of(step), 2)
+    failures = failures + expect_eq_int(label_at(step_schema(step), 2), label_email())
+    return failures
+}
+
+fn test_a_name_is_unique_among_live_columns() -> Int {
+    let step: SchemaStep = apply_alone(with_email(), add(3, label_email(), 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_name_taken())
+    failures = failures + expect_eq_int(payload_of(step), label_email())
+    return failures
+}
+
+fn test_a_key_past_the_bound_names_the_bound() -> Int {
+    let step: SchemaStep = apply_alone(users_table(), add(5, label_email(), 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_full())
+    failures = failures + expect_eq_int(payload_of(step), capacity())
+    return failures
+}
+
+fn test_a_key_below_one_is_unknown_rather_than_full() -> Int {
+    let step: SchemaStep = apply_alone(users_table(), add(0, label_email(), 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_key_unknown())
+    failures = failures + expect_eq_int(payload_of(step), 0)
+    return failures
+}
+
+# --------------------------------------------------------------- renames
+
+# The whole reason a column has a key: a rename changes the label and keeps
+# everything else, so no tool ever has to guess that it was one.
+fn test_a_rename_keeps_the_key_kind_and_nullability() -> Int {
+    let before: Schema = with_email()
+    let step: SchemaStep = apply_alone(before, rename(2, label_name()))
+    let after: Schema = step_schema(step)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_column_renamed())
+    failures = failures + expect_eq_int(payload_of(step), 2)
+    failures = failures + expect_eq_int(label_at(after, 2), label_name())
+    failures = failures + expect_eq_int(kind_at(after, 2), kind_at(before, 2))
+    failures = failures + expect_eq_int(nullable_at(after, 2), nullable_at(before, 2))
+    failures = failures + expect_eq_int(live_count(after), live_count(before))
+    return failures
+}
+
+fn test_renaming_to_its_own_name_is_not_a_collision() -> Int {
+    let step: SchemaStep = apply_alone(with_email(), rename(2, label_email()))
+    return expect_eq_int(kind_of(step), outcome_column_renamed())
+}
+
+fn test_renaming_onto_another_live_name_is_refused() -> Int {
+    let both: Schema = step_schema(apply_alone(with_email(), add(3, label_name(), 1, policy_none())))
+    let step: SchemaStep = apply_alone(both, rename(3, label_email()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_name_taken())
+    failures = failures + expect_eq_int(label_at(step_schema(step), 3), label_name())
+    return failures
+}
+
+fn test_renaming_a_key_that_never_held_a_column_is_unknown() -> Int {
+    let step: SchemaStep = apply_alone(with_email(), rename(3, label_name()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_key_unknown())
+    failures = failures + expect_eq_int(payload_of(step), 3)
+    return failures
+}
+
+# ----------------------------------------------------------------- drops
+
+fn test_a_drop_without_a_policy_is_destructive_and_changes_nothing() -> Int {
+    let before: Schema = with_email()
+    let step: SchemaStep = apply_alone(before, drop(2, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_destructive())
+    failures = failures + expect_eq_int(payload_of(step), 2)
+    failures = failures + expect_eq_int(is_live(step_schema(step), 2), 1)
+    return failures
+}
+
+fn test_a_drop_with_discard_retires_the_key() -> Int {
+    let step: SchemaStep = apply_alone(with_email(), drop(2, policy_discard()))
+    let after: Schema = step_schema(step)
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_column_dropped())
+    failures = failures + expect_eq_int(state_at(after, 2), slot_retired())
+    failures = failures + expect_eq_int(live_count(after), 1)
+    failures = failures + expect_eq_int(retired_count(after), 1)
+    return failures
+}
+
+# The mock's rule, for the same reason: a dropped key handed to a new column
+# would let anything that still remembers the old one read the new one.
+fn test_a_retired_key_stays_spent() -> Int {
+    let dropped: Schema = step_schema(apply_alone(with_email(), drop(2, policy_discard())))
+    let readd: SchemaStep = apply_alone(dropped, add(2, label_email(), 1, policy_none()))
+    let renamed: SchemaStep = apply_alone(dropped, rename(2, label_name()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(readd), outcome_key_retired())
+    failures = failures + expect_eq_int(payload_of(readd), 2)
+    failures = failures + expect_eq_int(kind_of(renamed), outcome_key_retired())
+    return failures
+}
+
+# The name was never the identity, so a dropped column's name is free again —
+# at a new key.
+fn test_a_dropped_name_may_return_at_a_new_key() -> Int {
+    let dropped: Schema = step_schema(apply_alone(with_email(), drop(2, policy_discard())))
+    let step: SchemaStep = apply_alone(dropped, add(3, label_email(), 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_column_added())
+    failures = failures + expect_eq_int(label_at(step_schema(step), 3), label_email())
+    return failures
+}
+
+fn test_the_primary_key_cannot_be_dropped_or_relaxed() -> Int {
+    let dropped: SchemaStep = apply_alone(with_email(), drop(1, policy_discard()))
+    let relaxed: SchemaStep = apply_alone(with_email(), set_nullable(1, 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(dropped), outcome_primary_key())
+    failures = failures + expect_eq_int(payload_of(dropped), 1)
+    failures = failures + expect_eq_int(kind_of(relaxed), outcome_primary_key())
+    return failures
+}
+
+# ----------------------------------------------------------- nullability
+
+fn test_tightening_needs_a_backfill_and_relaxing_does_not() -> Int {
+    let nullable: Schema = with_email()
+    let refused: SchemaStep = apply_alone(nullable, set_nullable(2, 0, policy_none()))
+    let tightened: SchemaStep = apply_alone(nullable, set_nullable(2, 0, policy_backfilled()))
+    let relaxed: SchemaStep = apply_alone(step_schema(tightened), set_nullable(2, 1, policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(refused), outcome_needs_backfill())
+    failures = failures + expect_eq_int(nullable_at(step_schema(refused), 2), 1)
+    failures = failures + expect_eq_int(kind_of(tightened), outcome_nullability_changed())
+    failures = failures + expect_eq_int(nullable_at(step_schema(tightened), 2), 0)
+    failures = failures + expect_eq_int(kind_of(relaxed), outcome_nullability_changed())
+    failures = failures + expect_eq_int(nullable_at(step_schema(relaxed), 2), 1)
+    return failures
+}
+
+# ------------------------------------------------------ outcome bookkeeping
+
+fn test_exactly_six_outcomes_apply_a_step() -> Int {
+    let mut applied_count = 0
+    applied_count = applied_count + outcome_applied(outcome_of(1, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(2, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(3, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(4, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(5, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(6, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(7, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(8, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(9, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(10, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(11, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(12, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(13, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(14, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(15, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(16, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(17, 0))
+    applied_count = applied_count + outcome_applied(outcome_of(18, 0))
+    return expect_eq_int(applied_count, 6)
+}
+
+# Every outcome kind survives a trip through its integer encoding. A drifted
+# accessor would make the trace print one answer while the core meant another.
+fn test_every_outcome_round_trips_through_its_code() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(outcome_kind(outcome_of(1, 7)), 1)
+    failures = failures + expect_eq_int(outcome_kind(outcome_of(5, 7)), 5)
+    failures = failures + expect_eq_int(outcome_kind(outcome_of(10, 7)), 10)
+    failures = failures + expect_eq_int(outcome_kind(outcome_of(15, 7)), 15)
+    failures = failures + expect_eq_int(outcome_payload(outcome_of(11, 7)), 7)
+    failures = failures + expect_eq_int(outcome_payload(outcome_of(15, 4)), 4)
+    return failures
+}
+
+# ------------------------------------------------------- replay and drift
+
+fn test_every_committed_step_applies() -> Int {
+    return expect_eq_int(refused_step(history_length()), 0)
+}
+
+# The shadow database, as a function call: the history replays, from nothing,
+# to exactly the schema the application declares.
+fn test_the_history_replays_to_the_declared_schema() -> Int {
+    let users: Drift = drift(declared_users(), table_after(table_users(), history_length()))
+    let posts: Drift = drift(declared_posts(), table_after(table_posts(), history_length()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(drift_kind(users), drift_in_sync())
+    failures = failures + expect_eq_int(drift_payload(users), 3)
+    failures = failures + expect_eq_int(drift_kind(posts), drift_in_sync())
+    failures = failures + expect_eq_int(drift_payload(posts), 3)
+    return failures
+}
+
+fn test_replay_is_a_value_and_does_not_depend_on_when_it_runs() -> Int {
+    let first: Schema = table_after(table_users(), history_length())
+    let second: Schema = table_after(table_users(), history_length())
+    return expect_eq_int(drift_kind(drift(first, second)), drift_in_sync())
+}
+
+# A prefix of the history is an earlier database. Between step 4 and step 5
+# the column at key 3 was still called `name` — the question a file-mutating
+# migration tool cannot answer without a database at that version.
+fn test_a_prefix_of_the_history_is_an_earlier_schema() -> Int {
+    let before_rename: Schema = table_after(table_users(), 4)
+    let after_rename: Schema = table_after(table_users(), 5)
+    let mut failures = 0
+    failures = failures + expect_eq_int(label_at(before_rename, 3), label_name())
+    failures = failures + expect_eq_int(label_at(after_rename, 3), label_display_name())
+    failures = failures + expect_eq_int(live_count(before_rename), 4)
+    return failures
+}
+
+# Editing the declaration without writing the migration is drift, and the
+# drift names the key rather than "something changed".
+fn test_drift_names_the_key_that_diverged() -> Int {
+    let edited: Schema = with_column(
+        declared_users(), table_users(), 1, 3, label_name(), kind_text(), 1,
+        slot_live(), 0
+    )
+    let found: Drift = drift(edited, table_after(table_users(), history_length()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(drift_kind(found), drift_diverged())
+    failures = failures + expect_eq_int(drift_payload(found), 3)
+    return failures
+}
+
+# Forgetting that a key was retired is drift too. protobuf calls the
+# declaration `reserved`; without it the next column could be handed key 4.
+fn test_a_forgotten_retirement_is_drift() -> Int {
+    let edited: Schema = with_column(
+        declared_users(), table_users(), 1, 4, 0, 0, 0, slot_empty(), 0
+    )
+    let found: Drift = drift(edited, table_after(table_users(), history_length()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(drift_kind(found), drift_diverged())
+    failures = failures + expect_eq_int(drift_payload(found), 4)
+    return failures
+}
+
+fn test_a_table_level_difference_is_drift_at_key_zero() -> Int {
+    let found: Drift = drift(declared_users(), empty_schema())
+    let mut failures = 0
+    failures = failures + expect_eq_int(drift_kind(found), drift_diverged())
+    failures = failures + expect_eq_int(drift_payload(found), 0)
+    return failures
+}
+
+# ---------------------------------------------------------------- plan
+
+fn test_an_in_sync_schema_plans_nothing() -> Int {
+    let replayed: Schema = table_after(table_users(), history_length())
+    let declared: Schema = declared_users()
+    let mut failures = 0
+    failures = failures + expect_eq_int(planned_kind(replayed, declared, 1), step_none())
+    failures = failures + expect_eq_int(planned_kind(replayed, declared, 2), step_none())
+    failures = failures + expect_eq_int(planned_kind(replayed, declared, 3), step_none())
+    failures = failures + expect_eq_int(planned_kind(replayed, declared, 4), step_none())
+    return failures
+}
+
+# The claim the module exists for. A label change at one key is planned as a
+# rename of that key — never as a drop of it and an add somewhere else — and
+# applying the plan closes the drift.
+fn test_a_rename_is_planned_as_a_rename_not_a_drop_and_add() -> Int {
+    let current: Schema = table_after(table_users(), 4)
+    let desired: Schema = table_after(table_users(), 5)
+    let mut failures = 0
+    let step: Migration = plan(current, desired, 3)
+    failures = failures + expect_eq_int(step.kind, step_rename_column())
+    failures = failures + expect_eq_int(step.key, 3)
+    failures = failures + expect_eq_int(step.label, label_display_name())
+    failures = failures + expect_eq_int(planned_kind(current, desired, 1), step_none())
+    failures = failures + expect_eq_int(planned_kind(current, desired, 2), step_none())
+    failures = failures + expect_eq_int(planned_kind(current, desired, 4), step_none())
+    let closed: Schema = step_schema(apply_alone(current, step))
+    failures = failures + expect_eq_int(drift_kind(drift(desired, closed)), drift_in_sync())
+    return failures
+}
+
+# The planner never chooses data loss. A planned drop carries no policy, so
+# applying it is refused until a person writes the policy into the history.
+fn test_a_planned_drop_carries_no_policy_and_is_refused_as_planned() -> Int {
+    let current: Schema = table_after(table_users(), 6)
+    let desired: Schema = table_after(table_users(), 7)
+    let step: Migration = plan(current, desired, 4)
+    let mut failures = 0
+    failures = failures + expect_eq_int(step.kind, step_drop_column())
+    failures = failures + expect_eq_int(step.policy, policy_none())
+    failures = failures + expect_eq_int(kind_of(apply_alone(current, step)), outcome_destructive())
+    return failures
+}
+
+fn test_a_planned_tightening_carries_no_policy_either() -> Int {
+    let current: Schema = table_after(table_users(), 5)
+    let desired: Schema = table_after(table_users(), 6)
+    let step: Migration = plan(current, desired, 2)
+    let mut failures = 0
+    failures = failures + expect_eq_int(step.kind, step_set_nullable())
+    failures = failures + expect_eq_int(step.nullable, 0)
+    failures = failures + expect_eq_int(step.policy, policy_none())
+    failures = failures + expect_eq_int(kind_of(apply_alone(current, step)), outcome_needs_backfill())
+    return failures
+}
+
+fn test_an_empty_database_plans_the_table_first() -> Int {
+    let step: Migration = plan(empty_schema(), declared_users(), 1)
+    let mut failures = 0
+    failures = failures + expect_eq_int(step.kind, step_create_table())
+    failures = failures + expect_eq_int(step.table, table_users())
+    failures = failures + expect_eq_int(step.label, label_id())
+    return failures
+}
+
+# A planned add at a retired key is refused by apply, by name. The planner
+# does not keep a second copy of that rule; the refusal comes from the one
+# place the rule lives.
+fn test_a_planned_add_at_a_retired_key_is_refused_by_apply() -> Int {
+    let current: Schema = table_after(table_users(), history_length())
+    let desired: Schema = with_column(
+        declared_users(), table_users(), 1, 4, label_nickname(), kind_text(), 1,
+        slot_live(), 0
+    )
+    let step: Migration = plan(current, desired, 4)
+    let mut failures = 0
+    failures = failures + expect_eq_int(step.kind, step_add_column())
+    failures = failures + expect_eq_int(kind_of(apply_alone(current, step)), outcome_key_retired())
+    return failures
+}

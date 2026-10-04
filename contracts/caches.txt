@@ -1,0 +1,7 @@
+# kofun-boot declared caches, projected by scripts/cache-manifest.sh from
+# the caches and writes the cache binary printed. Regenerate; do not edit.
+cache.list  key ()              lifetime 60s      tags things          http public, max-age=60
+cache.show  key (id)            lifetime forever  tags thing(id)       http public, no-cache
+cache.mine  key (id, caller)    lifetime 30s      tags thing(id)       http private, max-age=30
+write.put   invalidates things thing(id)
+write.give  invalidates thing(id)

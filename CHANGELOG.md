@@ -11,7 +11,273 @@ the `Unmeasured at this release` section added as a local requirement.
 
 ## [Unreleased]
 
-Nothing yet.
+The data lane has its first executable evidence. The schema is a value, a
+migration history is a fold, and N+1 is a measurement. The framework design is
+written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
+
+### Added
+
+- **`modules/schema` — the schema as a value**
+  ([#45](https://github.com/kofun-lang/kofun-boot/issues/45)).
+  - A column is identified by its **key**, not its name
+    ([ADR 8](docs/adr/0008-a-column-is-its-key.md)). A rename keeps the key, so
+    it is never inferred. A drop retires the key, and a retired key is refused
+    as `KeyRetired`, never reissued.
+  - `apply : Schema -> Migration -> SchemaStep` is pure, so a history is a
+    fold ([ADR 9](docs/adr/0009-a-migration-history-is-a-fold.md)).
+    `replay(history)` is the shadow database. `drift` returns `InSync(live)` or
+    `Diverged(key)`.
+  - A drop needs `Discard`. A NOT NULL addition or tightening needs a
+    backfill. The primary key cannot be dropped or relaxed.
+  - The planner decides by key and never supplies a policy.
+- **`scripts/ddl.sh`, `contracts/schema.sql`, `contracts/migrations.sql`** —
+  SQL projected from what the schema binary printed. Every code must resolve
+  to a name, and nothing is printed on a refusal. `scripts/dev.sh --schema`
+  prints both.
+- **`tests/schema/check.sh`** — the schema gate.
+  - It reads named decisions from the binary:
+    - every committed step applies;
+    - the history replays to the declaration;
+    - the plan is empty;
+    - the planner regenerates every committed step by key with no policy;
+    - six refusal probes move nothing.
+  - It checks that the committed SQL is the projection.
+  - Six break tests fail by name:
+    - a declared rename without a migration;
+    - a forgotten retirement;
+    - a history policy removed;
+    - a planner that drops instead of renaming;
+    - a hand-edited projection;
+    - an unnamed column.
+- **`tests/schema/postgres.sh`** — a throwaway PostgreSQL cluster on a Unix
+  socket.
+  - The migration SQL and the declared DDL must build databases with
+    byte-identical schema dumps.
+  - A negative control with one `NOT NULL` removed must differ.
+  - CI sets `SCHEMA_REQUIRE_POSTGRES=1`, so a missing server fails rather
+    than skips.
+- **`modules/loader` — N+1 as a measurement**
+  ([#46](https://github.com/kofun-lang/kofun-boot/issues/46),
+  [ADR 10](docs/adr/0010-a-round-is-a-value.md)).
+  - The interpreter coalesces each round of fetches before running it: one
+    statement per source, each key sent once.
+  - One request is written three ways, and all three load the same answer:
+    - sequential: 2 3 4 5 statements for N = 1..4;
+    - one round: 2 at every N;
+    - declared shape: 1 at every N.
+- **`tests/loader/check.sh`** — refuses a shipped strategy whose statement
+  count grows with N, naming the counts. It requires the sequential control
+  to keep growing, so the detector is never vacuous. Three break tests fail by
+  name:
+  - a sequential application;
+  - an uncoalesced interpreter;
+  - a lost dedupe.
+- **Two tables, references that name a key, and kind changes**
+  ([#47](https://github.com/kofun-lang/kofun-boot/issues/47),
+  [#48](https://github.com/kofun-lang/kofun-boot/issues/48)).
+  - The schema seed holds `users` and `posts`. A record in this slice cannot
+    hold a record, so the database is computed per table by
+    `table_after(table, n)`: a step changes only its own table and reads the
+    other to check a reference.
+  - A reference names the other table's key. It must be that table's live
+    primary key, of the same kind, or the add is refused as
+    `DanglingReference`.
+  - `AlterKind`:
+    - widening (`integer` to `bigint`, numeric or boolean to `text`) needs no
+      policy;
+    - narrowing needs `Discard`, and on a NOT NULL column is refused as
+      `NeedsBackfill`;
+    - a column in a reference is refused as `InReference`.
+  - The history has 11 steps, the probes cover the new refusals, and the gate
+    names a forgotten reference and a lattice that narrows silently.
+  - The PostgreSQL check compares the foreign key and the widened column, and
+    adds a negative control without the reference.
+  - `scripts/test-modules.sh` now builds one suite per test file, with the
+    module's non-suite `tests/*.kofun` files shared into each. A single
+    kotest harness is bounded by the language's lexical-use limit per
+    function.
+- **`Principal`: authorization is a value the handler receives**
+  ([#54](https://github.com/kofun-lang/kofun-boot/issues/54)).
+  - Each route slot declares the role it requires.
+  - `admit` is the fourth step of dispatch, after size, route, and method. It
+    reads the caller only for a Matched route; earlier refusals pass through
+    as `NotRouted`.
+  - The admission sum is `Admitted`, `Unauthenticated`, `Forbidden(role)`,
+    and `NotRouted(kind)`. Its status mapping is total, with no default arm:
+    200, 401, 403, or the refusal's own status, and never 5xx.
+  - A `Principal` is built only by the shell's authentication adapter, which
+    verifies a token with the credential capability. `handle_thing` takes a
+    caller as an argument.
+  - `scripts/check-modules.sh` and the boot gate refuse a core that
+    constructs a `Principal`, naming the line. The architecture test proves
+    it on a forged caller.
+  - The boot gate reads eight admission probes by name. Two break tests show
+    it fails when roles are ignored and when the caller is read before the
+    router's refusals.
+  - `contracts/openapi.yaml` marks protected operations with `security`,
+    `x-kofun-requires`, and their 401 and 403 answers.
+  - The socket-level header rule is split into
+    [#61](https://github.com/kofun-lang/kofun-boot/issues/61).
+- **Declared caches: the key is the handler's arguments**
+  ([#56](https://github.com/kofun-lang/kofun-boot/issues/56),
+  [ADR 11](docs/adr/0011-a-cache-key-is-the-arguments.md)).
+  - `modules/cache` declares a cache on each of three read endpoints, with a
+    key, a lifetime, and tags. Two writes declare the tags they invalidate.
+    A tag can be scoped by an argument, so a write to one row drops only that
+    row's entries.
+  - The build-time check refuses, in order: a key that omits an argument the
+    handler takes (`KeyOmits`), a key that names one it does not take
+    (`KeyForeign`), a cache that never expires with no tag
+    (`NeverRefreshed`), and one under a tag no write drops (`Uninvalidated`).
+    Five probes show each verdict.
+  - The in-memory adapter is four slots, folded over a recorded session of
+    23 calls. The trace records each miss, hit, expiry, invalidation, and
+    eviction, and two runs agree byte for byte.
+  - `tests/cache/check.sh` reads each read handler's signature from the
+    source and requires it to match the declared arguments. It requires
+    every served value to equal the uncached read, which catches both a stale
+    entry and a leaked one, naming the step.
+  - `scripts/cache-manifest.sh` projects `contracts/caches.txt`, one row per
+    cache and per write. A key that holds the caller is `private` to HTTP
+    caches, and a cache that never expires is `no-cache`. `scripts/dev.sh
+    --caches` prints it.
+  - Five break tests: a key without the caller, the declared arguments edited
+    to match that key, an uninvalidated tag, a forgotten invalidation that
+    only the trace can see, and a hand-edited manifest.
+- **Configuration is resolved before anything runs, and `boot explain`
+  accounts for every field** (first slice of
+  [#17](https://github.com/kofun-lang/kofun-boot/issues/17),
+  [ADR 12](docs/adr/0012-configuration-is-resolved-before-anything-runs.md)).
+  - `modules/config`: a starter is a pure pack. The base pack `http_minimal`
+    sets five fields, and three starters set some of them.
+  - Precedence is fixed: a `boot.conf` override, then a starter, then the
+    base default. Two starters that disagree are refused, naming the field
+    and both packs.
+  - The check also refuses an unknown pack, a missing base pack, an unknown
+    key, a key set twice, and a value out of range. Ten probes show each.
+  - A refused input exits 1 before printing any record.
+  - `scripts/boot-config.sh` compiles `boot.conf` into
+    `modules/config/shell/input.kofun` at build time. An unknown key or pack
+    is refused with the nearest real name.
+  - `scripts/boot-explain.sh` (`scripts/dev.sh --explain`) prints each
+    field's value, source, and reason. `contracts/boot.explain` is its
+    output.
+  - `tests/config/check.sh` requires one override to change exactly one line
+    and an override to beat a pack. It breaks precedence, conflict detection,
+    and the committed explanation, and runs three typos through the adapter.
+- **The database carries its schema digest**
+  ([#51](https://github.com/kofun-lang/kofun-boot/issues/51)).
+  - `scripts/schema-digest.sh` digests the declared tables, comments stripped.
+  - The schema binary prints the digest as `db.schema`. The gate recomputes it
+    and names a stale one.
+  - Both SQL projections end by recording it in `kofun_schema_marker`.
+  - `scripts/db-marker.sh DIGEST` is the startup check, as a shell adapter
+    until the shell holds a database capability. It refuses a database with
+    no marker, and one migrated to another digest, naming both numbers.
+  - `tests/schema/postgres.sh` runs it against real databases:
+    - the history and the declared DDL hold the digest;
+    - a database a step behind is refused;
+    - a rewritten marker is refused.
+  - The migration lock ignores the marker, which is not a step.
+- **`boot db plan / check / sql`**
+  ([#57](https://github.com/kofun-lang/kofun-boot/issues/57)).
+  - `scripts/db-plan.sh` (`scripts/dev.sh --db-plan`) prints the planner's
+    next steps as Kofun source to append to `history_step()`.
+    - It asks no questions: the key decides rename versus add.
+    - It never fills in a policy; a step `apply` would refuse carries a comment
+      naming the policy it will ask for.
+  - `--db-check` runs the schema gate without its break tests, and `--db-sql`
+    prints both SQL projections.
+  - The schema gate checks the plan's source against
+    `modules/schema/tests/plan.expected` for a declaration edited three ways.
+    It then appends that source with the one policy a person must write, and
+    requires the edited declaration to replay in sync.
+- **`boot new` scaffolds a schema**
+  ([#60](https://github.com/kofun-lang/kofun-boot/issues/60)).
+  - The generated project gets `modules/schema/`: one `items` table, a
+    one-step history, a core, a shell, and seven unit tests that keep passing
+    as the schema grows.
+  - `db.sh check` requires every step to apply, the history to replay to the
+    declaration, and the planner to regenerate every step with no policy.
+    `db.sh sql` prints the DDL, and the generated gate records it as
+    `modules/schema/schema.sql` and refuses a hand edit.
+  - The core is the schema engine cut to one table. The language slice has no
+    module imports and refuses a function nobody calls, so a project owns
+    the part of the engine it uses.
+  - `tests/scaffold/check.sh` edits the generated declaration without a
+    migration and requires the generated gate to name the key and the step
+    the planner proposes.
+- **Released migration history is append-only**
+  ([#52](https://github.com/kofun-lang/kofun-boot/issues/52)).
+  - `scripts/migrations-lock.sh release VERSION` pins each released step's
+    executable SQL by digest in `contracts/migrations.lock`.
+  - `tests/release/check.sh` refuses a released step that changed or
+    disappeared, naming the step and the version that released it.
+  - Rewording a projection comment is not a change.
+  - The gate proves all three directions in a scratch copy on every run.
+  - No version has shipped the schema yet, so every step is listed as
+    unreleased.
+- **Declared shapes compile to a fixed number of statements, measured by
+  PostgreSQL** ([#49](https://github.com/kofun-lang/kofun-boot/issues/49)).
+  - The loader core decides what a shape compiles to on a dialect:
+    - a join is `Compiled(1)` where `LATERAL` exists, and `NeedsLateral(relation)`
+      where it does not;
+    - a split is one statement per level.
+  - `scripts/shape-sql.sh` projects `contracts/shapes.sql`: a `LEFT JOIN LATERAL`
+    + `json_agg` statement, and the split pair. It refuses a join for SQLite by
+    naming the relation.
+  - `tests/loader/postgres.sh` seeds N = 1..4 authors and has the server log
+    every statement (`log_statement = 'all'`, prefixed by application name).
+    It requires join 1 1 1 1, split 2 2 2 2, a per-row control of 2 3 4 5, and
+    identical answers.
+  - `tests/lib/postgres.sh` is the throwaway cluster that both real-database
+    checks now share.
+- **Two pillars in the README table**, each mapped to its gate in
+  `tests/release/check.sh`:
+  - *Schema as a contract*
+  - *No N+1 by construction*
+- **Design documents.**
+  - [`docs/architecture/BLUEPRINT.md`](docs/architecture/BLUEPRINT.md): the
+    whole framework, layer by layer, with what is taken and refused from each
+    reference and the gate behind each claim.
+  - [`docs/architecture/DATA.md`](docs/architecture/DATA.md): the data lane's
+    decisions.
+  - [`docs/research/NEXT_PRISMA_DRIZZLE.md`](docs/research/NEXT_PRISMA_DRIZZLE.md)
+    and [`docs/research/N_PLUS_ONE.md`](docs/research/N_PLUS_ONE.md): the
+    dated, source-linked surveys behind them.
+- **Issues filed from the design**: #47–#58. These cover:
+  - foreign keys, kind changes, shape compilation, typed queries, the
+    database digest, append-only history, and data migrations (L7);
+  - `Principal` (L3);
+  - generated wire codecs (L1);
+  - declared caches (L2/L11);
+  - `boot db` (L8);
+  - the research pack (R0).
+
+### Changed
+
+- **The research pack is stamped 2026-10-04 and carries every dossier, ADR,
+  and architecture document**
+  ([#58](https://github.com/kofun-lang/kofun-boot/issues/58)).
+  - The stamp is defined once, in `scripts/build-research-pack.sh`. The gate
+    asks the script for the name instead of repeating it.
+  - `tests/research/check.sh` discovers the documents from the filesystem. It
+    fails, by file name, on one that is neither packed nor excluded with a
+    written reason, and it shows that it can fail.
+- **CI runs five more jobs**: the schema, loader, cache, and config gates,
+  and the PostgreSQL checks with their SKIP disabled.
+  `scripts/dev.sh --check` runs all of them.
+- **L7 is no longer wholly blocked.** Typed queries and row codecs still wait
+  on List/Text lowering. Schema, migration, and round decisions fit the
+  fixed-slot seed pattern and are now executable.
+
+### Unmeasured at this release
+
+- Speed — L5; the benchmark harness exists and refuses to produce a number it
+  does not trust, but no baseline has been recorded.
+- Desktop lighter than Tauri — L9; blocked on the language's wasm32 activation
+  lanes, and gated behind IME and accessibility conformance before any number
+  is recorded ([#29](https://github.com/kofun-lang/kofun-boot/issues/29)).
 
 ## [0.5.1] - 2026-08-11
 

@@ -60,11 +60,57 @@ The generated project already has the module boundary and its own gate.
 |---|---|
 | `sh scripts/dev.sh --openapi` | OpenAPI projected from the route table |
 | `sh scripts/dev.sh --client` | typed TypeScript client projected from the route table |
+| `sh scripts/dev.sh --schema` | DDL and migration SQL projected from the schema |
+| `sh scripts/dev.sh --caches` | declared caches as manifest rows |
+| `sh scripts/dev.sh --explain` | `boot explain`: where every resolved configuration value came from |
 | `sh scripts/dev.sh --replay` | recorded session-trace replay |
 | `sh scripts/dev.sh --research` | deterministic research ZIP and SHA-256 |
 
 Both the document and client are read from the table the router prints, so
 neither can describe a route the dispatcher does not serve.
+
+### Schema and migrations
+
+The schema is a value in `modules/schema/core/`. Columns are addressed by key,
+so a rename keeps its key and a dropped key is retired for good. The migration
+history is a list of values. Its replay must equal the declaration, or the
+gate names the key that drifted and the step that would close it.
+
+```sh
+sh scripts/dev.sh --schema          # contracts/schema.sql and contracts/migrations.sql
+sh tests/schema/check.sh            # drift, planner, refusals, projections
+sh tests/schema/postgres.sh         # both SQL files build the same PostgreSQL database
+```
+
+A drop is refused until the history names `Discard`, and tightening a column
+is refused until it names a backfill. The planner never supplies either.
+
+### N+1
+
+`tests/loader/check.sh` runs one request at N = 1 to 4. It refuses the shipped
+strategy if its statement count changes with N.
+
+### Caches
+
+A cache is declared on a read endpoint with a key, a lifetime, and tags. The
+key must be exactly the handler's arguments, and a cache that never expires
+needs every tag dropped by some write.
+
+```sh
+sh scripts/dev.sh --caches          # contracts/caches.txt
+sh tests/cache/check.sh             # the build-time check, the replayed session, break tests
+```
+
+### Configuration
+
+`modules/config/boot.conf` selects starter packs and overrides fields. It is
+compiled into a value at build time, resolved before anything else runs, and
+explained field by field.
+
+```sh
+sh scripts/dev.sh --explain         # compile boot.conf, print contracts/boot.explain's lines
+sh tests/config/check.sh            # probe verdicts, one override is one line, break tests
+```
 
 ### Record and replay
 
@@ -113,6 +159,8 @@ only place that builds the capability record and the only place that prints.
 - [Functional core, imperative shell + DDD](architecture/FDDD.md)
 - [The Elm Architecture](architecture/TEA.md)
 - [Effects](architecture/EFFECTS.md)
+- [Data](architecture/DATA.md)
+- [Blueprint — the whole design, layer by layer](architecture/BLUEPRINT.md)
 
 ### Decisions
 
@@ -123,6 +171,11 @@ only place that builds the capability record and the only place that prints.
 - [ADR 5 — A trace is the core's fold](adr/0005-a-trace-is-the-fold-the-core-already-performs.md)
 - [ADR 6 — A module owns its whole vertical](adr/0006-a-module-owns-its-whole-vertical.md)
 - [ADR 7 — A full resource is a conflict](adr/0007-a-full-resource-is-a-conflict-not-a-storage-failure.md)
+- [ADR 8 — A column is its key](adr/0008-a-column-is-its-key.md)
+- [ADR 9 — A migration history is a fold](adr/0009-a-migration-history-is-a-fold.md)
+- [ADR 10 — A round of fetches is a value](adr/0010-a-round-is-a-value.md)
+- [ADR 11 — A cache key is the handler's arguments](adr/0011-a-cache-key-is-the-arguments.md)
+- [ADR 12 — Configuration is resolved before anything runs](adr/0012-configuration-is-resolved-before-anything-runs.md)
 
 ### Research
 
@@ -133,6 +186,8 @@ only place that builds the capability record and the only place that prints.
 - [Effect systems](research/EFFECT_SYSTEMS.md)
 - [Desktop frameworks](research/DESKTOP_FRAMEWORKS.md)
 - [Render backends](research/RENDER_BACKENDS.md)
+- [Next.js, Prisma, Drizzle](research/NEXT_PRISMA_DRIZZLE.md)
+- [N+1](research/N_PLUS_ONE.md)
 
 ---
 

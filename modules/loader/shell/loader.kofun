@@ -1,0 +1,276 @@
+# The loader's imperative shell: the database, the interpreter, and the run
+# loop that feeds each round's answer back into the core.
+#
+# The database is a value this file builds and the core never sees. The
+# interpreter is the only code that reads it, and it reads it once per round:
+# whatever the core asked for in that round is answered together, the way the
+# coalesced statements would be answered by a real connection.
+#
+# Every section opens with its name and closes with `end <name>`:
+#
+#   strategy  the strategy the application ships with
+#   requests  a count, then seven lines per (strategy, N):
+#             strategy n rounds statements keys outcome payload
+#             for every strategy, at N = 1, 2, 3 and 4 authors
+#   verdict   a count, then four lines per strategy: strategy, statements
+#             at N = 1, statements at N = capacity, and 1 when the count
+#             grows with N — the N+1 detector, run by the binary itself
+#   coalesce  a count, then two lines per probe round: statements keys
+#   shapes    a count, then five lines per (shape, dialect):
+#             load dialect outcome payload lateral
+#             outcome 1 is Compiled(statements), 2 is NeedsLateral(relation)
+#   database  the seed's data, for the real-database check: the author
+#             capacity, then the post count of each author
+#
+# tests/loader/check.sh reads the requests section and refuses any strategy
+# the application ships with whose statement count grows with N.
+
+# The seed's data, and the only place it exists: four authors, of whom the
+# first `authors` are present, with fixed post counts.
+type Database = {
+    authors: Int,
+    p1: Int,
+    p2: Int,
+    p3: Int,
+    p4: Int,
+}
+
+fn database(authors: Int) -> Database {
+    let db: Database = Database(
+        authors: authors,
+        p1: 3,
+        p2: 1,
+        p3: 4,
+        p4: 1
+    )
+    return db
+}
+
+fn posts_of(db: Database, author: Int) -> Int {
+    if author > db.authors {
+        return 0
+    }
+    return eq(author, 1) * db.p1
+        + eq(author, 2) * db.p2
+        + eq(author, 3) * db.p3
+        + eq(author, 4) * db.p4
+}
+
+fn asks(round: Round, source: Int, key: Int) -> Int {
+    return positive(
+        eq(round.f1_source, source) * eq(round.f1_key, key)
+            + eq(round.f2_source, source) * eq(round.f2_key, key)
+            + eq(round.f3_source, source) * eq(round.f3_key, key)
+            + eq(round.f4_source, source) * eq(round.f4_key, key)
+    )
+}
+
+# One author's count, if this round asked for it either way: by key, or
+# through the declared shape for an author that exists.
+fn answered_count(db: Database, round: Round, author: Int) -> Int {
+    let by_key: Int = asks(round, source_posts_by_author(), author)
+    let mut by_shape: Int = 0
+    if author <= db.authors {
+        by_shape = names_source(round, source_authors_with_counts())
+    }
+    if positive(by_key + by_shape) == 1 {
+        return posts_of(db, author)
+    }
+    return unknown()
+}
+
+# The interpreter: one round in, one answer out.
+fn execute(db: Database, round: Round) -> Answer {
+    let mut authors: Int = unknown()
+    if positive(
+        names_source(round, source_authors())
+            + names_source(round, source_authors_with_counts())
+    ) == 1 {
+        authors = db.authors
+    }
+    let answer: Answer = Answer(
+        authors: authors,
+        c1: answered_count(db, round, 1),
+        c2: answered_count(db, round, 2),
+        c3: answered_count(db, round, 3),
+        c4: answered_count(db, round, 4)
+    )
+    return answer
+}
+
+# A request that has not finished after this many rounds is reported as
+# stalled rather than run forever. Every strategy here finishes in at most
+# N + 1 = 5, so the bound is never what decides a correct run.
+fn round_limit() -> Int {
+    return 8
+}
+
+type Report = {
+    rounds: Int,
+    statements: Int,
+    keys: Int,
+    outcome: Int,
+    payload: Int,
+}
+
+fn report(progress: Progress, rounds: Int, statements: Int, keys: Int) -> Report {
+    let result: LoadOutcome = outcome(progress, rounds)
+    let done_report: Report = Report(
+        rounds: rounds,
+        statements: statements,
+        keys: keys,
+        outcome: outcome_kind(result),
+        payload: outcome_payload(result)
+    )
+    return done_report
+}
+
+# The update loop: ask, coalesce, answer, absorb, until the core asks for
+# nothing. Each pass is one round trip.
+fn run(
+    db: Database,
+    strategy: Int,
+    progress: Progress,
+    rounds: Int,
+    statements: Int,
+    keys: Int
+) -> Report {
+    let round: Round = next_round(strategy, progress)
+    if is_empty(round) == 1 {
+        return report(progress, rounds, statements, keys)
+    }
+    if rounds >= round_limit() {
+        return report(progress, rounds, statements, keys)
+    }
+    let batch: Batch = coalesce(round)
+    let answer: Answer = execute(db, round)
+    return run(
+        db,
+        strategy,
+        absorb(progress, answer),
+        rounds + 1,
+        statements + batch.statements,
+        keys + batch.keys
+    )
+}
+
+fn emit_request(strategy: Int, authors: Int) -> Int {
+    let done_report: Report = run(database(authors), strategy, fresh(), 0, 0, 0)
+    print(strategy)
+    print(authors)
+    print(done_report.rounds)
+    print(done_report.statements)
+    print(done_report.keys)
+    print(done_report.outcome)
+    print(done_report.payload)
+    return 0
+}
+
+fn emit_strategy(strategy: Int) -> Int {
+    emit_request(strategy, 1)
+    emit_request(strategy, 2)
+    emit_request(strategy, 3)
+    emit_request(strategy, capacity())
+    return 0
+}
+
+fn statements_at(strategy: Int, authors: Int) -> Int {
+    let done_report: Report = run(database(authors), strategy, fresh(), 0, 0, 0)
+    return done_report.statements
+}
+
+fn emit_verdict(strategy: Int) -> Int {
+    let smallest: Int = statements_at(strategy, 1)
+    let largest: Int = statements_at(strategy, capacity())
+    print(strategy)
+    print(smallest)
+    print(largest)
+    print(grows_with_n(smallest, largest))
+    return 0
+}
+
+fn emit_coalesced(round: Round) -> Int {
+    let batch: Batch = coalesce(round)
+    print(batch.statements)
+    print(batch.keys)
+    return 0
+}
+
+fn emit_shape(load: Int, name: Int) -> Int {
+    let target: Dialect = dialect(name)
+    let result: ShapeOutcome = compile_shape(shape(load), target)
+    print(load)
+    print(name)
+    print(shape_outcome_kind(result))
+    print(shape_outcome_payload(result))
+    print(target.lateral)
+    return 0
+}
+
+fn emit_database() -> Int {
+    let db: Database = database(capacity())
+    print(db.authors)
+    print(db.p1)
+    print(db.p2)
+    print(db.p3)
+    print(db.p4)
+    return 0
+}
+
+fn main() -> Int {
+    print("kofun-boot loader")
+    print("contract")
+    print(1)
+
+    print("strategy")
+    print(app_strategy())
+    print("end strategy")
+
+    print("requests")
+    print(12)
+    emit_strategy(strategy_sequential())
+    emit_strategy(strategy_round())
+    emit_strategy(strategy_shape())
+    print("end requests")
+
+    print("verdict")
+    print(3)
+    emit_verdict(strategy_sequential())
+    emit_verdict(strategy_round())
+    emit_verdict(strategy_shape())
+    print("end verdict")
+
+    print("coalesce")
+    print(3)
+    # The same key asked for twice in one round is sent once.
+    emit_coalesced(round_of(
+        source_posts_by_author(), 2,
+        source_posts_by_author(), 2,
+        source_posts_by_author(), 3,
+        source_posts_by_author(), 3
+    ))
+    # Three sources in one round are three statements, not four.
+    emit_coalesced(round_of(
+        source_authors(), 0,
+        source_posts_by_author(), 1,
+        source_posts_by_author(), 1,
+        source_authors_with_counts(), 0
+    ))
+    # An empty round sends nothing.
+    emit_coalesced(empty_round())
+    print("end coalesce")
+
+    print("shapes")
+    print(4)
+    emit_shape(load_join(), dialect_postgresql())
+    emit_shape(load_split(), dialect_postgresql())
+    emit_shape(load_join(), dialect_sqlite())
+    emit_shape(load_split(), dialect_sqlite())
+    print("end shapes")
+
+    print("database")
+    emit_database()
+    print("end database")
+
+    return 0
+}

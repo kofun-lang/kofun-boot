@@ -1,0 +1,309 @@
+# Unit tests for the loader core.
+#
+# The coalescing rule first, because it is the framework's half: what the
+# interpreter will send for a round. Then the application's half: the same
+# request written three ways, each walked round by round with the answers a
+# database would give, so the tests can count round trips without one.
+
+fn statements_of(round: Round) -> Int {
+    let batch: Batch = coalesce(round)
+    return batch.statements
+}
+
+fn keys_of(round: Round) -> Int {
+    let batch: Batch = coalesce(round)
+    return batch.keys
+}
+
+# A test-side answer: the authors present, each with a fixed count, filled
+# only where the round asked. It is not the shell's interpreter; it is the
+# smallest thing that lets a test walk a request.
+fn answer_for(round: Round, authors: Int) -> Answer {
+    let mut count_authors: Int = unknown()
+    if positive(
+        names_source(round, source_authors())
+            + names_source(round, source_authors_with_counts())
+    ) == 1 {
+        count_authors = authors
+    }
+    let answer: Answer = Answer(
+        authors: count_authors,
+        c1: asked_count(round, authors, 1),
+        c2: asked_count(round, authors, 2),
+        c3: asked_count(round, authors, 3),
+        c4: asked_count(round, authors, 4)
+    )
+    return answer
+}
+
+fn asked_count(round: Round, authors: Int, author: Int) -> Int {
+    if author > authors {
+        return unknown()
+    }
+    let by_key: Int = eq(round.f1_source, source_posts_by_author()) * eq(round.f1_key, author)
+        + eq(round.f2_source, source_posts_by_author()) * eq(round.f2_key, author)
+        + eq(round.f3_source, source_posts_by_author()) * eq(round.f3_key, author)
+        + eq(round.f4_source, source_posts_by_author()) * eq(round.f4_key, author)
+    let by_shape: Int = names_source(round, source_authors_with_counts())
+    if positive(by_key + by_shape) == 1 {
+        return 10 * author
+    }
+    return unknown()
+}
+
+# Rounds until the request asks for nothing, bounded so a stalled strategy
+# fails the test instead of hanging it.
+fn rounds_from(strategy: Int, progress: Progress, authors: Int, rounds: Int) -> Int {
+    let round: Round = next_round(strategy, progress)
+    if is_empty(round) == 1 {
+        return rounds
+    }
+    if rounds > 8 {
+        return rounds
+    }
+    return rounds_from(strategy, absorb(progress, answer_for(round, authors)), authors, rounds + 1)
+}
+
+fn statements_from(strategy: Int, progress: Progress, authors: Int, total: Int) -> Int {
+    let round: Round = next_round(strategy, progress)
+    if is_empty(round) == 1 {
+        return total
+    }
+    if total > 16 {
+        return total
+    }
+    return statements_from(
+        strategy,
+        absorb(progress, answer_for(round, authors)),
+        authors,
+        total + statements_of(round)
+    )
+}
+
+fn final_progress(strategy: Int, progress: Progress, authors: Int, rounds: Int) -> Progress {
+    let round: Round = next_round(strategy, progress)
+    if is_empty(round) == 1 {
+        return progress
+    }
+    if rounds > 8 {
+        return progress
+    }
+    return final_progress(strategy, absorb(progress, answer_for(round, authors)), authors, rounds + 1)
+}
+
+# ------------------------------------------------------------ coalescing
+
+fn test_one_source_is_one_statement_however_many_fetches_name_it() -> Int {
+    let round: Round = round_of(
+        source_posts_by_author(), 1,
+        source_posts_by_author(), 2,
+        source_posts_by_author(), 3,
+        source_posts_by_author(), 4
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(fetch_count(round), 4)
+    failures = failures + expect_eq_int(statements_of(round), 1)
+    failures = failures + expect_eq_int(keys_of(round), 4)
+    return failures
+}
+
+# DataLoader's per-request cache, as arithmetic: a key asked for twice in one
+# round is sent once.
+fn test_a_repeated_key_is_sent_once() -> Int {
+    let round: Round = round_of(
+        source_posts_by_author(), 2,
+        source_posts_by_author(), 3,
+        source_posts_by_author(), 2,
+        source_posts_by_author(), 3
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(statements_of(round), 1)
+    failures = failures + expect_eq_int(keys_of(round), 2)
+    return failures
+}
+
+fn test_a_repeat_is_found_whichever_slots_it_is_in() -> Int {
+    let early: Round = round_of(
+        source_posts_by_author(), 4,
+        source_posts_by_author(), 4,
+        0, 0,
+        0, 0
+    )
+    let late: Round = round_of(
+        source_posts_by_author(), 4,
+        0, 0,
+        0, 0,
+        source_posts_by_author(), 4
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(keys_of(early), 1)
+    failures = failures + expect_eq_int(keys_of(late), 1)
+    return failures
+}
+
+# The same number under different sources is not a repeat: whole-table reads
+# carry no keys at all.
+fn test_sources_are_counted_separately() -> Int {
+    let round: Round = round_of(
+        source_authors(), 0,
+        source_posts_by_author(), 1,
+        source_authors_with_counts(), 0,
+        source_posts_by_author(), 1
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(statements_of(round), 3)
+    failures = failures + expect_eq_int(keys_of(round), 1)
+    return failures
+}
+
+fn test_an_empty_round_sends_nothing() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(is_empty(empty_round()), 1)
+    failures = failures + expect_eq_int(statements_of(empty_round()), 0)
+    failures = failures + expect_eq_int(keys_of(empty_round()), 0)
+    return failures
+}
+
+# ------------------------------------------------------- the application
+
+fn test_every_strategy_starts_by_asking_for_something() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(is_empty(next_round(strategy_sequential(), fresh())), 0)
+    failures = failures + expect_eq_int(is_empty(next_round(strategy_round(), fresh())), 0)
+    failures = failures + expect_eq_int(is_empty(next_round(strategy_shape(), fresh())), 0)
+    return failures
+}
+
+# The natural shape: once the authors are known, every count is asked for in
+# one round, and that round is one statement.
+fn test_the_round_strategy_asks_for_every_author_at_once() -> Int {
+    let known_authors: Progress = absorb(fresh(), answer_for(next_round(strategy_round(), fresh()), 4))
+    let round: Round = next_round(strategy_round(), known_authors)
+    let mut failures = 0
+    failures = failures + expect_eq_int(fetch_count(round), 4)
+    failures = failures + expect_eq_int(statements_of(round), 1)
+    return failures
+}
+
+fn test_the_sequential_strategy_asks_for_one_author_per_round() -> Int {
+    let known_authors: Progress = absorb(fresh(), answer_for(next_round(strategy_sequential(), fresh()), 4))
+    let round: Round = next_round(strategy_sequential(), known_authors)
+    let mut failures = 0
+    failures = failures + expect_eq_int(fetch_count(round), 1)
+    failures = failures + expect_eq_int(round.f1_key, 1)
+    return failures
+}
+
+# The claim, in its smallest form. Sequential costs N + 1 statements; one
+# round costs 2 at every N; a declared shape costs 1.
+fn test_statement_counts_by_strategy_and_n() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(statements_from(strategy_sequential(), fresh(), 1, 0), 2)
+    failures = failures + expect_eq_int(statements_from(strategy_sequential(), fresh(), 4, 0), 5)
+    failures = failures + expect_eq_int(statements_from(strategy_round(), fresh(), 1, 0), 2)
+    failures = failures + expect_eq_int(statements_from(strategy_round(), fresh(), 4, 0), 2)
+    failures = failures + expect_eq_int(statements_from(strategy_shape(), fresh(), 1, 0), 1)
+    failures = failures + expect_eq_int(statements_from(strategy_shape(), fresh(), 4, 0), 1)
+    return failures
+}
+
+fn test_rounds_are_bounded_by_dependency_depth_not_by_n() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(rounds_from(strategy_round(), fresh(), 1, 0), 2)
+    failures = failures + expect_eq_int(rounds_from(strategy_round(), fresh(), 4, 0), 2)
+    failures = failures + expect_eq_int(rounds_from(strategy_shape(), fresh(), 4, 0), 1)
+    failures = failures + expect_eq_int(rounds_from(strategy_sequential(), fresh(), 4, 0), 5)
+    return failures
+}
+
+# Every strategy computes the same answer. Batching is an optimisation of
+# how the question is sent, never of what the answer is.
+fn test_every_strategy_loads_the_same_answer() -> Int {
+    let sequential: Progress = final_progress(strategy_sequential(), fresh(), 3, 0)
+    let in_one_round: Progress = final_progress(strategy_round(), fresh(), 3, 0)
+    let shape: Progress = final_progress(strategy_shape(), fresh(), 3, 0)
+    let mut failures = 0
+    failures = failures + expect_eq_int(outcome_kind(outcome(sequential, 0)), 1)
+    failures = failures + expect_eq_int(total_posts(sequential), 60)
+    failures = failures + expect_eq_int(total_posts(in_one_round), 60)
+    failures = failures + expect_eq_int(total_posts(shape), 60)
+    return failures
+}
+
+# An application that stops asking before it has its answer is reported as
+# stalled, carrying the round, rather than as a zero.
+fn test_a_request_that_stops_early_is_stalled_not_empty() -> Int {
+    let half: Progress = absorb(fresh(), answer_for(single(source_authors(), 0), 2))
+    let result: LoadOutcome = outcome(half, 1)
+    let mut failures = 0
+    failures = failures + expect_eq_int(outcome_kind(result), 2)
+    failures = failures + expect_eq_int(outcome_payload(result), 1)
+    return failures
+}
+
+fn test_no_authors_means_one_round_and_nothing_to_count() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(rounds_from(strategy_round(), fresh(), 0, 0), 1)
+    failures = failures + expect_eq_int(statements_from(strategy_round(), fresh(), 0, 0), 1)
+    let empty: Progress = final_progress(strategy_round(), fresh(), 0, 0)
+    failures = failures + expect_eq_int(outcome_kind(outcome(empty, 1)), 1)
+    failures = failures + expect_eq_int(total_posts(empty), 0)
+    return failures
+}
+
+# ------------------------------------------------------------ detection
+
+fn test_the_detector_flags_growth_and_only_growth() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(grows_with_n(2, 5), 1)
+    failures = failures + expect_eq_int(grows_with_n(2, 2), 0)
+    failures = failures + expect_eq_int(grows_with_n(1, 1), 0)
+    return failures
+}
+
+fn test_the_shipped_strategy_does_not_grow_with_n() -> Int {
+    let smallest: Int = statements_from(app_strategy(), fresh(), 1, 0)
+    let largest: Int = statements_from(app_strategy(), fresh(), capacity(), 0)
+    return expect_eq_int(grows_with_n(smallest, largest), 0)
+}
+
+# ---------------------------------------------------------------- shapes
+
+fn test_a_joined_shape_is_one_statement_on_a_dialect_with_lateral() -> Int {
+    let result: ShapeOutcome = compile_shape(shape(load_join()), dialect(dialect_postgresql()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(shape_outcome_kind(result), 1)
+    failures = failures + expect_eq_int(shape_outcome_payload(result), 1)
+    return failures
+}
+
+fn test_a_split_shape_is_one_statement_per_level_on_any_dialect() -> Int {
+    let on_postgresql: ShapeOutcome = compile_shape(shape(load_split()), dialect(dialect_postgresql()))
+    let on_sqlite: ShapeOutcome = compile_shape(shape(load_split()), dialect(dialect_sqlite()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(shape_outcome_payload(on_postgresql), 2)
+    failures = failures + expect_eq_int(shape_outcome_payload(on_sqlite), 2)
+    return failures
+}
+
+# No silent fallback: a join the target cannot express is refused, naming the
+# relation, rather than quietly becoming a split with a different count.
+fn test_a_join_without_lateral_is_refused_naming_the_relation() -> Int {
+    let result: ShapeOutcome = compile_shape(shape(load_join()), dialect(dialect_sqlite()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(shape_outcome_kind(result), 2)
+    failures = failures + expect_eq_int(shape_outcome_payload(result), relation_posts())
+    return failures
+}
+
+# The declared-shape strategy the application runs costs exactly what its
+# shape compiles to: the request's count and the shape's count are one number.
+fn test_the_shape_strategy_costs_what_the_shape_compiles_to() -> Int {
+    let compiled: ShapeOutcome = compile_shape(shape(load_join()), dialect(dialect_postgresql()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(
+        statements_from(strategy_shape(), fresh(), capacity(), 0),
+        shape_outcome_payload(compiled)
+    )
+    return failures
+}

@@ -35,10 +35,18 @@ type Path = {
     segments: List[Text],
 }
 
+# The role a caller must hold.  Public is the absence of a requirement, and it
+# is still a value: a route that says nothing about roles says Public.
+type Role =
+    | Public
+    | Member
+    | Admin
+
 type Route = {
     method: Method,
     path: Path,
     handler: HandlerId,
+    requires: Role,
 }
 
 type RouteTable = {
@@ -56,6 +64,26 @@ type RouteResult =
     | NotFound(path: Path)
     | MethodNotAllowed(allowed: List[Method])
     | PayloadTooLarge(limit: Int, observed: Int)
+
+# The authenticated caller.  Only the shell's authentication adapter, which
+# holds the credential capability, constructs one; a core that constructs one
+# is refused by the architecture gate, naming the line.  A handler that needs
+# a caller takes a Principal argument, so a route reached without
+# authentication does not type-check — no header, and no reordering of
+# steps, can supply an argument nobody could construct.
+type Principal = {
+    subject: SubjectId,
+    role: Role,
+}
+
+# The fourth step of dispatch.  A request the router already refused is
+# NotRouted with that refusal, so a refused request learns nothing about
+# which routes need a caller.
+type Admission =
+    | Admitted(handler: HandlerId, caller: Principal)
+    | Unauthenticated(handler: HandlerId)
+    | Forbidden(required: Role, held: Role)
+    | NotRouted(refusal: RouteResult)
 
 # The capability record an application is a function of. Every field follows
 # the language's own capability contracts: the clock is the affine-handle
@@ -86,6 +114,16 @@ fn boot_dispatch(
     table: CompiledTable,
     request: Request
 ) -> RouteResult {
+    ...
+}
+
+# Size, then route, then method, then the caller.  Only a Matched result is
+# ever checked against the caller; every earlier refusal passes through.
+fn boot_admit(
+    table: RouteTable,
+    result: RouteResult,
+    caller: Principal
+) -> Admission {
     ...
 }
 

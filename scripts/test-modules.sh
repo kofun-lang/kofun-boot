@@ -8,6 +8,14 @@ set -eu
 # tests/ directories, so this adapter concatenates them into a temporary
 # suite.  No generated test unit enters the worktree.
 #
+# Each tests/*_test.kofun file is its own suite: the module's core, then the
+# module's support files (tests/*.kofun that are not suites, holding helpers
+# several suites share), then that one test file.  kotest's generated harness
+# is a single `main`, and the language bounds lexical uses per function, so a
+# suite holds a few dozen tests; splitting by file is how a module grows past
+# that without renaming its core.  Suite names must be unique across modules,
+# because kotest labels every test by its suite.
+#
 # usage: scripts/test-modules.sh [--watch] [kotest options]
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -34,29 +42,40 @@ fi
 assemble() {
     suites=''
     found=0
+    rm -f "$WORK"/*_test.kofun
     for module_dir in "$MODULES_ROOT"/*; do
         test -d "$module_dir" || continue
         module=$(basename -- "$module_dir")
-        suite="$WORK/${module}_test.kofun"
 
         set -- "$module_dir"/core/*.kofun
         test -f "$1" || fail "$module has no core/*.kofun"
-        : >"$suite"
-        for source in "$module_dir"/core/*.kofun; do
-            cat "$source" >>"$suite"
-            printf '\n' >>"$suite"
-        done
 
         tests=0
-        for source in "$module_dir"/tests/*_test.kofun; do
-            test -f "$source" || continue
-            cat "$source" >>"$suite"
+        for test_file in "$module_dir"/tests/*_test.kofun; do
+            test -f "$test_file" || continue
+            suite="$WORK/$(basename -- "$test_file")"
+            test ! -e "$suite" ||
+                fail "two modules own a suite named $(basename -- "$test_file"); suite names must be unique"
+            : >"$suite"
+            for source in "$module_dir"/core/*.kofun; do
+                cat "$source" >>"$suite"
+                printf '\n' >>"$suite"
+            done
+            for source in "$module_dir"/tests/*.kofun; do
+                case $source in
+                    *_test.kofun) continue ;;
+                esac
+                test -f "$source" || continue
+                cat "$source" >>"$suite"
+                printf '\n' >>"$suite"
+            done
+            cat "$test_file" >>"$suite"
             printf '\n' >>"$suite"
+            suites="$suites $suite"
             tests=$((tests + 1))
         done
         test "$tests" -gt 0 || fail "$module has no tests/*_test.kofun"
 
-        suites="$suites $suite"
         found=$((found + 1))
     done
     test "$found" -gt 0 || fail 'no modules found'

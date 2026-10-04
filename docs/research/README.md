@@ -36,6 +36,8 @@ to prose:
 | [`DESKTOP_FRAMEWORKS.md`](DESKTOP_FRAMEWORKS.md) | What does a desktop app actually cost, and which costs are the webview's fault? | [R7 #22](https://github.com/kofun-lang/kofun-boot/issues/22), [L9 #9](https://github.com/kofun-lang/kofun-boot/issues/9) |
 | [`RENDER_BACKENDS.md`](RENDER_BACKENDS.md) | Can a webview be replaced by something native and faster — and what does that really require? | [R10 #28](https://github.com/kofun-lang/kofun-boot/issues/28) |
 | [`EFFECT_SYSTEMS.md`](EFFECT_SYSTEMS.md) | How do languages that take effects seriously actually handle them, and which of those designs survives a language without higher-kinded types? | [R3 #18](https://github.com/kofun-lang/kofun-boot/issues/18), [L11 #26](https://github.com/kofun-lang/kofun-boot/issues/26) |
+| [`NEXT_PRISMA_DRIZZLE.md`](NEXT_PRISMA_DRIZZLE.md) | Next.js 16・Prisma 7/8・Drizzle・Spring Boot 4 の何を採り、どこで真実を推測に委ねているか? | [L7 #7](https://github.com/kofun-lang/kofun-boot/issues/7), [#45](https://github.com/kofun-lang/kofun-boot/issues/45), [#54](https://github.com/kofun-lang/kofun-boot/issues/54), [#56](https://github.com/kofun-lang/kofun-boot/issues/56) |
+| [`N_PLUS_ONE.md`](N_PLUS_ONE.md) | N+1 を起こさずに快適に書くには? ORM・query compiler・DataLoader・Haxl/FP の全手法と kofun-boot の決定 | [#46](https://github.com/kofun-lang/kofun-boot/issues/46), [#49](https://github.com/kofun-lang/kofun-boot/issues/49), [#50](https://github.com/kofun-lang/kofun-boot/issues/50) |
 
 The architecture decisions these dossiers produced live one directory up, in
 [`docs/architecture/`](../architecture/).
@@ -66,6 +68,10 @@ and compares the bytes.
 
 ## Stamp
 
-The series was written on 2026-08-02. Each dossier owns its source and version
+The series was written on 2026-08-02. `NEXT_PRISMA_DRIZZLE.md` and
+`N_PLUS_ONE.md` were added on 2026-10-04. The research pack is stamped
+2026-10-04 and carries every dossier, ADR, and architecture document;
+`tests/research/check.sh` fails on one that is neither packed nor excluded by
+name ([#58](https://github.com/kofun-lang/kofun-boot/issues/58)). Each dossier owns its source and version
 stamp; the generated pack owns a content manifest instead of claiming one Git
 commit for independently refreshed documents.
