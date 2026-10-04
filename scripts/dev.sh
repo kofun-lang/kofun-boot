@@ -14,6 +14,9 @@ set -eu
 #   scripts/dev.sh --research build the deterministic research ZIP
 #   scripts/dev.sh --client   print the typed client the route table projects
 #   scripts/dev.sh --schema   print the DDL and migration SQL the schema projects
+#   scripts/dev.sh --db-sql   the same: boot db sql
+#   scripts/dev.sh --db-plan  print the next history steps as source: boot db plan
+#   scripts/dev.sh --db-check drift, refusals, and projections: boot db check
 #   scripts/dev.sh --shapes   print the SQL the loader's declared shapes compile to
 #   scripts/dev.sh --scaffold generate a project and run its gate
 #   scripts/dev.sh --replay   replay the recorded session trace
@@ -95,11 +98,20 @@ case "${1:-}" in
     --client)
         sh "$ROOT/scripts/client-ts.sh"
         ;;
-    --schema)
+    --schema|--db-sql)
         binary=$(SEED=schema sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/schema")
         sh "$ROOT/scripts/ddl.sh" schema "$binary"
         printf '\n'
         sh "$ROOT/scripts/ddl.sh" migrations "$binary"
+        ;;
+    --db-plan)
+        sh "$ROOT/scripts/db-plan.sh"
+        ;;
+    --db-check)
+        # The schema gate's own checks, without the break tests that prove the
+        # gate can fail: the question a developer asks before committing is
+        # "is my schema change complete", not "does the gate still work".
+        SCHEMA_SKIP_BREAK_TEST=1 sh "$ROOT/tests/schema/check.sh"
         ;;
     --shapes)
         binary=$(SEED=loader sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/loader")

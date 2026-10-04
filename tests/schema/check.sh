@@ -323,6 +323,72 @@ done
 
 printf 'schema: contracts/schema.sql and contracts/migrations.sql are projections, not edits: PASS\n'
 
+# ------------------------------------------------------------- boot db plan
+#
+# scripts/db-plan.sh turns the binary's plan section into source for the next
+# history steps. In sync, it says so and prints none. Against a declaration
+# edited three ways — users key 3 renamed back, posts key 3 narrowed, posts
+# key 4 added — it prints the golden in modules/schema/tests/plan.expected.
+# Then the loop is closed: the planned source is appended to the history,
+# the one policy apply asks for is written in as a person would write it,
+# and the edited declaration must replay in sync.
+
+plan_tool=${SCHEMA_DB_PLAN:-"$ROOT/scripts/db-plan.sh"}
+sh "$plan_tool" "$WORK/schema" >"$WORK/plan.now"
+test "$(cat "$WORK/plan.now")" = '# db-plan: nothing to plan; the history replays to the declaration' ||
+    fail "db-plan proposed steps for a history already in sync: $(head -3 "$WORK/plan.now")"
+
+if test "${SCHEMA_SKIP_PLAN_LOOP:-0}" != 1; then
+    drifted="$WORK/drifted"
+    rm -rf "$drifted"
+    cp -R "$module" "$drifted"
+    awk '
+        /^        c3_label: label_display_name\(\),$/ && !renamed { print "        c3_label: label_name(),"; renamed = 1; next }
+        /^fn declared_posts\(\) -> Schema \{$/ { posts = 1 }
+        posts && /^        c3_kind: kind_bigint\(\),$/ { print "        c3_kind: kind_integer(),"; next }
+        posts && /^        c4_label: 0,$/ { print "        c4_label: label_nickname(),"; next }
+        posts && /^        c4_kind: 0,$/ { print "        c4_kind: kind_text(),"; next }
+        posts && /^        c4_nullable: 0,$/ { print "        c4_nullable: 1,"; next }
+        posts && /^        c4_state: slot_empty\(\),$/ { print "        c4_state: slot_live(),"; posts = 0; next }
+        { print }
+    ' "$core" >"$drifted/core/schema.kofun"
+    cmp -s "$core" "$drifted/core/schema.kofun" &&
+        fail 'the plan loop changed nothing; its edits no longer match the declared schema'
+    cat "$drifted/core/schema.kofun" "$shell" >"$WORK/drifted.unit.kofun"
+    "$KOFUN" build "$WORK/drifted.unit.kofun" -o "$WORK/drifted.bin" >"$WORK/drifted.build" 2>&1 ||
+        fail "the drifted declaration did not build: $(cat "$WORK/drifted.build")"
+    sh "$plan_tool" "$WORK/drifted.bin" >"$WORK/plan.drifted"
+    cmp -s "$module/tests/plan.expected" "$WORK/plan.drifted" ||
+        fail "db-plan's source for the drifted declaration differs from tests/plan.expected:
+$(diff "$module/tests/plan.expected" "$WORK/plan.drifted")"
+
+    # A person's part: the narrowing is accepted with Discard. Everything else
+    # is appended exactly as planned.
+    sed '/step_alter_kind()/{n;s/policy_none()/policy_discard()/;}' "$WORK/plan.drifted" |
+        grep -v '^#' >"$WORK/plan.appended"
+    planned_total=$(sed -n 's/^# history_length() to \([0-9]*\),.*/\1/p' "$WORK/plan.drifted")
+    test -n "$planned_total" || fail 'db-plan did not say what history_length() becomes'
+    awk -v insert="$WORK/plan.appended" -v total="$planned_total" '
+        /^fn history_length\(\) -> Int \{$/ { in_length = 1 }
+        in_length && /^    return [0-9]+$/ { print "    return " total; in_length = 0; next }
+        /^fn history_step\(number: Int\) -> Migration \{$/ { in_step = 1 }
+        in_step && /^    return no_step\(\)$/ {
+            while ((getline line < insert) > 0) print line
+            in_step = 0
+        }
+        { print }
+    ' "$drifted/core/schema.kofun" >"$WORK/closed.core.kofun"
+    cat "$WORK/closed.core.kofun" "$shell" >"$WORK/closed.unit.kofun"
+    "$KOFUN" build "$WORK/closed.unit.kofun" -o "$WORK/closed.bin" >"$WORK/closed.build" 2>&1 ||
+        fail "the drifted declaration with the planned steps appended did not build: $(cat "$WORK/closed.build")"
+    "$WORK/closed.bin" >"$WORK/closed.out"
+    closed=$(sed -n '/^drift$/,/^end drift$/p' "$WORK/closed.out" | sed '1d;$d' | tr '\n' ' ')
+    test "$closed" = '1 1 3 2 1 4 0 ' ||
+        fail "the planned steps, appended with the one policy apply asked for, did not close the drift: $closed"
+fi
+
+printf 'schema: db-plan prints the next steps as source, and appending them closes the drift: PASS\n'
+
 # ------------------------------------------------------------ break tests
 #
 # Each check above, broken in an isolated copy and required to fail by name.

@@ -34,7 +34,9 @@ cd ../my-app && sh tests/check.sh      # its own gate: boundary, suite, golden, 
 | `sh scripts/dev.sh --openapi` | the document the route table projects |
 | `sh scripts/dev.sh --research` | deterministic framework-research ZIP + SHA-256 |
 | `sh scripts/dev.sh --client` | the typed client the route table projects |
-| `sh scripts/dev.sh --schema` | the DDL and migration SQL the schema projects |
+| `sh scripts/dev.sh --schema` | the DDL and migration SQL the schema projects (`--db-sql`) |
+| `sh scripts/dev.sh --db-plan` | the next migration steps, as source to append; no prompts, no policies filled in |
+| `sh scripts/dev.sh --db-check` | drift, refusals, regeneration, and projections, without the break tests |
 | `sh scripts/dev.sh --shapes` | the SQL the loader's declared shapes compile to |
 | `sh scripts/dev.sh --scaffold` | generate a project and run its gate |
 | `sh scripts/dev.sh --replay` | replay the recorded session trace |

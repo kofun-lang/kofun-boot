@@ -96,6 +96,21 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
     module's non-suite `tests/*.kofun` files shared into each. A single
     kotest harness is bounded by the language's lexical-use limit per
     function.
+- **`boot db plan / check / sql`**
+  ([#57](https://github.com/kofun-lang/kofun-boot/issues/57)).
+  - `scripts/db-plan.sh` (`scripts/dev.sh --db-plan`) prints the planner's
+    next steps as Kofun source to append to `history_step()`.
+    - It asks no questions: the key decides rename versus add.
+    - It never fills in a policy; a step `apply` would refuse carries a comment
+      naming the policy it will ask for.
+  - `--db-check` runs the schema gate without its break tests, and `--db-sql`
+    prints both SQL projections.
+  - The schema gate checks the plan's source against
+    `modules/schema/tests/plan.expected` for a declaration edited three ways.
+    It then appends that source with the one policy a person must write, and
+    requires the edited declaration to replay in sync.
+  - Scaffolding a schema into `boot new` is split into
+    [#60](https://github.com/kofun-lang/kofun-boot/issues/60).
 - **Released migration history is append-only**
   ([#52](https://github.com/kofun-lang/kofun-boot/issues/52)).
   - `scripts/migrations-lock.sh release VERSION` pins each released step's

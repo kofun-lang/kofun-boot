@@ -1,0 +1,22 @@
+# Planned by scripts/db-plan.sh from the plan the schema binary printed.
+# Append to history_step() in modules/schema/core/schema.kofun, raise
+# history_length() to 14, and write a policy wherever apply asks for one.
+    if number == 12 {
+        return migration(
+            step_rename_column(), table_users(), 3, label_name(), 0, 0,
+            policy_none()
+        )
+    }
+    # a narrowing is refused as Destructive until the policy is policy_discard()
+    if number == 13 {
+        return migration(
+            step_alter_kind(), table_posts(), 3, 0, kind_integer(), 0,
+            policy_none()
+        )
+    }
+    if number == 14 {
+        return migration(
+            step_add_column(), table_posts(), 4, label_nickname(), kind_text(), 1,
+            policy_none()
+        )
+    }
