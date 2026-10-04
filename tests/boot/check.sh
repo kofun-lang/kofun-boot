@@ -112,6 +112,12 @@ if grep -qE 'Capabilities\(' "$WORK/core.code"; then
     grep -nE 'Capabilities\(' "$WORK/core.code" >&2
     exit 1
 fi
+if grep -qE 'Principal\(' "$WORK/core.code"; then
+    printf '%s\n' \
+        'boot: FAIL: the functional core constructs a principal instead of receiving one:' >&2
+    grep -nE 'Principal\(' "$WORK/core.code" >&2
+    exit 1
+fi
 if grep -qE '^fn main' "$WORK/core.code"; then
     fail 'the functional core owns an entry point; emission belongs to the shell'
 fi
@@ -333,12 +339,54 @@ assert_field 'a capturing route joins the Allow set and refuses without capturin
 assert_field 'a handler is pure and its clock is the injected field' \
     81 85 '200 101042 200 106 101043 '
 
+before_requires=$(grep -n -x 'requires' "$WORK/body" | head -1 | cut -d: -f1)
+test "${before_requires:-0}" -eq 86 ||
+    fail "the dispatch decisions do not end where the requires section begins: expected line 86, got '${before_requires:-none}'"
+
+# --------------------------------------------------- admission (the caller)
+#
+# The fourth step of dispatch, after size, route, and method. The role column
+# is printed in its own section so the twenty table lines the projections read
+# are untouched; the admission probes are read by name, row by row.
+body_section() {
+    grep -qx "$1" "$WORK/body" || fail "the router printed no '$1' section"
+    grep -qx "end $1" "$WORK/body" || fail "the '$1' section is never closed"
+    sed -n "/^$1\$/,/^end $1\$/p" "$WORK/body" | sed '1d;$d'
+}
+test "$(body_section requires | tr '\n' ' ')" = '0 1 0 0 2 ' ||
+    fail "the role column is not public, member, public, public, admin: $(body_section requires | tr '\n' ' ')"
+body_section admission >"$WORK/admission"
+test "$(sed -n 1p "$WORK/admission")" = 8 || fail 'expected eight admission probes'
+sed -n '2,57p' "$WORK/admission" | paste - - - - - - - >"$WORK/admission.rows"
+admission_row() {
+    label=$1
+    row=$2
+    want=$3
+    got=$(sed -n "${row}p" "$WORK/admission.rows" | tr '\t' ' ')
+    test "$got" = "$want" || fail "$label: expected '$want', got '$got'"
+}
+admission_row 'a public route admits an anonymous caller' 1 '1 101 0 1 1 1 200'
+admission_row 'a protected route without a caller is unauthenticated' 2 '2 102 0 1 2 2 401'
+admission_row 'a member is admitted to a member route' 3 '2 102 7001 1 1 2 200'
+admission_row 'a caller below the route is forbidden, naming the role' 4 '1 104007 7001 1 3 2 403'
+admission_row 'an admin is admitted to an admin route' 5 '1 104007 9001 1 1 5 200'
+admission_row 'an oversized request to a protected route is refused for its size' 6 '2 102 0 4 4 4 413'
+admission_row 'a wrong method is refused before the caller is read' 7 '1 102 0 3 4 3 405'
+admission_row 'an unknown path is refused before the caller is read' 8 '1 999 0 2 4 2 404'
+test "$(sed -n '58,59p' "$WORK/admission" | tr '\n' ' ')" = '200 7009 ' ||
+    fail "the admitted admin did not reach the handler that needs a caller: $(sed -n '58,59p' "$WORK/admission" | tr '\n' ' ')"
+if awk -F'\t' '$7 >= 500 { found = 1 } END { exit found ? 0 : 1 }' "$WORK/admission.rows"; then
+    fail 'an admission mapped into 5xx; refusing a caller is an answer, not a server failure'
+fi
+
 lines=$(wc -l <"$WORK/body" | tr -d ' ')
-test "$lines" -eq 85 ||
-    fail "recorded decisions cover the whole body: expected 85 lines, got $lines"
+test "$lines" -eq 153 ||
+    fail "recorded decisions cover the whole body: expected 153 lines, got $lines"
 
 # Every named decision passed, so a difference here is a line no assertion
 # owns. Checked last, and against the run rather than the other way round.
+printf 'boot: size, route, method, then the caller: admission refuses by name and never in 5xx: PASS\n'
+
 cmp "$expected" "$WORK/backend.stdout" ||
     fail 'named decisions passed but the recorded dispatch golden still differs'
 
@@ -434,6 +482,39 @@ if test "${ROUTER_SKIP_BREAK_TEST:-0}" != 1; then
         "$WORK/router.break-manifest-digest.log"
 
     printf 'boot: dropped row, unscoped grant, and stale build identity fail by name: PASS\n'
+
+    # An admission that stops comparing roles: a member reaches the admin
+    # route. Every other probe still holds.
+    cp -R "$router_module" "$router_breaks/admission-role"
+    sed -i 's/^    if caller.role < needed {$/    if caller.role < 0 {/' \
+        "$router_breaks/admission-role/core/router.kofun"
+    if ROUTER_MODULE="$router_breaks/admission-role" \
+        ROUTER_SKIP_BREAK_TEST=1 EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        >"$WORK/router.break-admission-role.log" 2>&1
+    then
+        fail 'an admission that ignores roles did not break the gate'
+    fi
+    require_line 'the ignored role was not named' \
+        'a caller below the route is forbidden, naming the role' \
+        "$WORK/router.break-admission-role.log"
+
+    # An admission that reads the caller before the router's refusals pass
+    # through: an oversized request is then judged as a call, which is the
+    # probe-the-route-space leak the dispatch order exists to prevent.
+    cp -R "$router_module" "$router_breaks/admission-order"
+    sed -i 's/^    if kind != kind_matched() {$/    if kind == 99 {/' \
+        "$router_breaks/admission-order/core/router.kofun"
+    if ROUTER_MODULE="$router_breaks/admission-order" \
+        ROUTER_SKIP_BREAK_TEST=1 EFFECTS_SKIP_BREAK_TEST=1 sh "$0" \
+        >"$WORK/router.break-admission-order.log" 2>&1
+    then
+        fail 'an admission that reads the caller before earlier refusals did not break the gate'
+    fi
+    require_line 'the admission order break was not named' \
+        'an oversized request to a protected route is refused for its size' \
+        "$WORK/router.break-admission-order.log"
+
+    printf 'boot: an admission that ignores roles, or reads the caller too early, fails by name: PASS\n'
 fi
 
 # ------------------------------------------------------- the effect boundary

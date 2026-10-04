@@ -133,6 +133,38 @@ fn kind_payload_too_large() -> Int {
     return 4
 }
 
+# Roles a route may require, in order: a caller whose role is at least the
+# route's is admitted. Public is zero, so a slot that says nothing about
+# roles requires nothing — and the manifest-style rule applies: the zero is
+# printed, never omitted.
+fn role_public() -> Int {
+    return 0
+}
+
+fn role_member() -> Int {
+    return 1
+}
+
+fn role_admin() -> Int {
+    return 2
+}
+
+fn admission_admitted() -> Int {
+    return 1
+}
+
+fn admission_unauthenticated() -> Int {
+    return 2
+}
+
+fn admission_forbidden() -> Int {
+    return 3
+}
+
+fn admission_not_routed() -> Int {
+    return 4
+}
+
 # ---------------------------------------------------------------- values
 
 # A parsed request. Paths arrive as codes because the Core has no Text in
@@ -161,22 +193,27 @@ type RouteTable = {
     r0_path: Int,
     r0_handler: Int,
     r0_capture: Int,
+    r0_requires: Int,
     r1_method: Int,
     r1_path: Int,
     r1_handler: Int,
     r1_capture: Int,
+    r1_requires: Int,
     r2_method: Int,
     r2_path: Int,
     r2_handler: Int,
     r2_capture: Int,
+    r2_requires: Int,
     r3_method: Int,
     r3_path: Int,
     r3_handler: Int,
     r3_capture: Int,
+    r3_requires: Int,
     r4_method: Int,
     r4_path: Int,
     r4_handler: Int,
     r4_capture: Int,
+    r4_requires: Int,
 }
 
 # The closed dispatch result. Every failure carries what was observed:
@@ -229,6 +266,27 @@ type Capabilities = {
     fs_root: Int,
 }
 
+# The authenticated caller. Only the shell's authentication adapter builds
+# one, from a credential it verified with a capability; the core receives it
+# and never constructs it, and scripts/check-modules.sh fails, naming the
+# line, on a core that does. An anonymous caller is a Principal too — role
+# public, subject zero — so "no caller" is a value the adapter decided, not
+# the absence of an argument a handler could forget to check.
+type Principal = {
+    subject: Int,
+    role: Int,
+}
+
+# The fourth step of dispatch, after size, route, and method. A request the
+# router already refused is NotRouted, carrying the router's refusal kind, so
+# an oversized or unroutable request learns nothing about which routes need a
+# caller — the same reason size is checked before route.
+type Admission =
+    | Admitted(handler: Int)
+    | Unauthenticated(handler: Int)
+    | Forbidden(role: Int)
+    | NotRouted(kind: Int)
+
 # What a handler produces. Pure data out; the shell decides what to do with it.
 type Response = {
     status: Int,
@@ -267,22 +325,27 @@ fn boot_table() -> RouteTable {
         r0_path: path_hello(),
         r0_handler: 1,
         r0_capture: literal(),
+        r0_requires: role_public(),
         r1_method: method_post(),
         r1_path: path_sum(),
         r1_handler: 2,
         r1_capture: literal(),
+        r1_requires: role_member(),
         r2_method: method_get(),
         r2_path: path_bench(),
         r2_handler: 3,
         r2_capture: literal(),
+        r2_requires: role_public(),
         r3_method: method_post(),
         r3_path: path_bench(),
         r3_handler: 4,
         r3_capture: literal(),
+        r3_requires: role_public(),
         r4_method: method_get(),
         r4_path: path_thing(),
         r4_handler: 5,
-        r4_capture: capturing()
+        r4_capture: capturing(),
+        r4_requires: role_admin()
     )
     return table
 }
@@ -426,6 +489,90 @@ fn dispatch_of(table: RouteTable, request: Request) -> Dispatch {
     return outcome
 }
 
+# ------------------------------------------------------------ admission
+
+# The role a handler's route requires: one term per slot, exactly one of which
+# names the handler.
+fn requires_of(table: RouteTable, handler: Int) -> Int {
+    return eq_flag(table.r0_handler, handler) * table.r0_requires
+        + eq_flag(table.r1_handler, handler) * table.r1_requires
+        + eq_flag(table.r2_handler, handler) * table.r2_requires
+        + eq_flag(table.r3_handler, handler) * table.r3_requires
+        + eq_flag(table.r4_handler, handler) * table.r4_requires
+}
+
+# Size, route, and method are decided by `dispatch`; this is the fourth step,
+# and it only ever looks at the caller once a route was taken. The order is
+# the structure of the function, not a convention: a refusal from an earlier
+# step passes through untouched.
+fn admit(table: RouteTable, result: RouteResult, caller: Principal) -> Admission {
+    let kind: Int = result_kind(result)
+    if kind != kind_matched() {
+        return NotRouted(kind)
+    }
+    let handler: Int = result_payload(result)
+    let needed: Int = requires_of(table, handler)
+    if needed == role_public() {
+        return Admitted(handler)
+    }
+    if caller.role == role_public() {
+        return Unauthenticated(handler)
+    }
+    if caller.role < needed {
+        return Forbidden(needed)
+    }
+    return Admitted(handler)
+}
+
+fn admission_kind(admission: Admission) -> Int {
+    let mut kind = 0
+    match admission {
+        Admitted(_) => { kind = admission_admitted() },
+        Unauthenticated(_) => { kind = admission_unauthenticated() },
+        Forbidden(_) => { kind = admission_forbidden() },
+        NotRouted(_) => { kind = admission_not_routed() },
+    }
+    return kind
+}
+
+fn admission_payload(admission: Admission) -> Int {
+    let mut payload = 0
+    match admission {
+        Admitted(handler) => { payload = handler },
+        Unauthenticated(handler) => { payload = handler },
+        Forbidden(role) => { payload = role },
+        NotRouted(kind) => { payload = kind },
+    }
+    return payload
+}
+
+# The status a router refusal maps to. NotRouted only ever carries one of the
+# three refusal kinds, because a Matched result is never NotRouted.
+fn refusal_status(kind: Int) -> Int {
+    if kind == kind_not_found() {
+        return 404
+    }
+    if kind == kind_method_not_allowed() {
+        return 405
+    }
+    return 413
+}
+
+# One status per admission, total over the closed sum and with no default
+# arm: a constructor added without a status does not compile. A caller the
+# route does not admit is a client error — 401 without a caller, 403 with the
+# wrong one — never a 5xx.
+fn admission_status(admission: Admission) -> Int {
+    let mut status = 0
+    match admission {
+        Admitted(_) => { status = 200 },
+        Unauthenticated(_) => { status = 401 },
+        Forbidden(_) => { status = 403 },
+        NotRouted(kind) => { status = refusal_status(kind) },
+    }
+    return status
+}
+
 # A request value. A constructor is pure data assembly, so it belongs to the
 # core: a test builds requests without touching the shell at all.
 fn request_at(method: Int, path: Int, body_bytes: Int) -> Request {
@@ -446,6 +593,17 @@ fn handle_hello(request: Request, capabilities: Capabilities) -> Response {
     let response: Response = Response(
         status: 200,
         body_code: request.path * 1000 + capabilities.now_seconds
+    )
+    return response
+}
+
+# A handler that needs an authenticated caller says so in its signature. It
+# cannot be called without a Principal, and the core cannot make one, so the
+# only way to reach it is through the shell's authentication adapter.
+fn handle_thing(request: Request, caller: Principal) -> Response {
+    let response: Response = Response(
+        status: 200,
+        body_code: (request.path % capture_base()) * 1000 + caller.subject
     )
     return response
 }

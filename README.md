@@ -71,6 +71,27 @@ The dispatch order is the contract and the gate reads it: **size before route,
 route before method**, so an oversized request cannot probe the route space by
 watching the refusal change.
 
+**Then the caller.** A slot declares the role it requires, and `admit` is the
+fourth step. It reads the caller only once a route was taken. Earlier
+refusals pass through as `NotRouted`, so an oversized request to a protected
+route is a 413, never a 401 that reveals the route needs a caller.
+
+```
+POST /sum   anonymous   → Unauthenticated(handler 2)   401
+POST /sum   member      → Admitted(handler 2)          200
+GET  /things/7 member   → Forbidden(admin)             403
+POST /sum   body 4097   → NotRouted(PayloadTooLarge)   413   ← size before caller
+```
+
+A `Principal` is built only by the shell's authentication adapter, from a
+credential it verified with a capability. A handler that needs a caller takes
+one as an argument. The architecture gate refuses, by source and line, a core
+that constructs one. This is the lesson of CVE-2025-29927, which let a request
+skip Next.js middleware by sending the framework's own header: authorization is
+an argument nobody can forge, not a layer the request is assumed to have
+passed. The OpenAPI projection marks protected operations with `security` and
+their 401 and 403 answers.
+
 ### The mock resource — json-server's five minutes, replayable
 
 `modules/mock/` owns a second bounded context and gives a full REST resource

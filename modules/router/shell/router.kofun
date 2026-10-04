@@ -97,6 +97,55 @@ fn emit_dispatch(table: RouteTable, request: Request) -> Int {
     return 0
 }
 
+# The authentication adapter: the one place a Principal is built. It verifies
+# a credential using the credential capability; with that capability denied,
+# every caller is anonymous, because there is nothing to verify against.
+#
+# The seed's credential store holds two tokens. A real adapter reads a
+# session or a signed token; what it must never do is read a framework
+# control signal from the request — CVE-2025-29927 let a request skip Next.js
+# middleware by sending the framework's own `x-middleware-subrequest` header.
+# Here the request carries no field the adapter or the router treats as an
+# instruction, and the caller is an argument the handler cannot be called
+# without.
+fn authenticate(capabilities: Capabilities, token: Int) -> Principal {
+    let mut subject = 0
+    let mut role = role_public()
+    if is_granted(capabilities.credential_store) == 1 {
+        if token == 7001 {
+            subject = 7
+            role = role_member()
+        }
+        if token == 9001 {
+            subject = 9
+            role = role_admin()
+        }
+    }
+    let caller: Principal = Principal(subject: subject, role: role)
+    return caller
+}
+
+# Seven lines per probe: the request, the token it carried, what dispatch
+# decided, and what admission decided — kind, payload, status.
+fn emit_admission(
+    table: RouteTable,
+    capabilities: Capabilities,
+    request: Request,
+    token: Int
+) -> Int {
+    let routed: RouteResult = dispatch(table, request)
+    let caller: Principal = authenticate(capabilities, token)
+    let admission: Admission = admit(table, routed, caller)
+    print(request.method)
+    print(request.path)
+    print(token)
+    print(result_kind(routed))
+    print(admission_kind(admission))
+    print(admission_payload(admission))
+    print(admission_status(admission))
+    return 0
+}
+
 fn main() -> Int {
     # --- the effective capability set, before anything else happens.
     #
@@ -235,6 +284,37 @@ fn main() -> Int {
     )
     let hello_later: Response = handle_hello(hello, later)
     print(hello_later.body_code)
+
+    # --- the role each slot requires, in slot order: the table's fifth
+    #     column, printed in its own section so the twenty table lines the
+    #     projections read stay exactly as they were.
+    print("requires")
+    print(table.r0_requires)
+    print(table.r1_requires)
+    print(table.r2_requires)
+    print(table.r3_requires)
+    print(table.r4_requires)
+    print("end requires")
+
+    # --- admission: size, route, method, then the caller. Refusals from the
+    #     first three pass through as NotRouted, so a request the router
+    #     refused never learns which routes need a caller.
+    print("admission")
+    print(8)
+    emit_admission(table, capabilities, hello, 0)
+    emit_admission(table, capabilities, sum, 0)
+    emit_admission(table, capabilities, sum, 7001)
+    emit_admission(table, capabilities, captured, 7001)
+    emit_admission(table, capabilities, captured, 9001)
+    emit_admission(table, capabilities, request_at(method_post(), path_sum(), 4097), 0)
+    emit_admission(table, capabilities, wrong_method, 0)
+    emit_admission(table, capabilities, missing, 0)
+    # The admitted admin reaches the handler that requires a caller, and the
+    # response names who it was.
+    let thing: Response = handle_thing(captured, authenticate(capabilities, 9001))
+    print(thing.status)
+    print(thing.body_code)
+    print("end admission")
 
     return 0
 }

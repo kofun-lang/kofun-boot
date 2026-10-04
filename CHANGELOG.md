@@ -96,6 +96,28 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
     module's non-suite `tests/*.kofun` files shared into each. A single
     kotest harness is bounded by the language's lexical-use limit per
     function.
+- **`Principal`: authorization is a value the handler receives**
+  ([#54](https://github.com/kofun-lang/kofun-boot/issues/54)).
+  - Each route slot declares the role it requires.
+  - `admit` is the fourth step of dispatch, after size, route, and method. It
+    reads the caller only for a Matched route; earlier refusals pass through
+    as `NotRouted`.
+  - The admission sum is `Admitted`, `Unauthenticated`, `Forbidden(role)`,
+    and `NotRouted(kind)`. Its status mapping is total, with no default arm:
+    200, 401, 403, or the refusal's own status, and never 5xx.
+  - A `Principal` is built only by the shell's authentication adapter, which
+    verifies a token with the credential capability. `handle_thing` takes a
+    caller as an argument.
+  - `scripts/check-modules.sh` and the boot gate refuse a core that
+    constructs a `Principal`, naming the line. The architecture test proves
+    it on a forged caller.
+  - The boot gate reads eight admission probes by name. Two break tests show
+    it fails when roles are ignored and when the caller is read before the
+    router's refusals.
+  - `contracts/openapi.yaml` marks protected operations with `security`,
+    `x-kofun-requires`, and their 401 and 403 answers.
+  - The socket-level header rule is split into
+    [#61](https://github.com/kofun-lang/kofun-boot/issues/61).
 - **The database carries its schema digest**
   ([#51](https://github.com/kofun-lang/kofun-boot/issues/51)).
   - `scripts/schema-digest.sh` digests the declared tables, comments stripped.

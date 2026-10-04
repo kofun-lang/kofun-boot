@@ -36,6 +36,16 @@ table=$(printf '%s\n' "$output" | sed -n '/^end manifest$/,$p' | sed -n '2,21p')
 test "$(printf '%s\n' "$table" | wc -l)" -eq 20 ||
     fail 'the router did not print a twenty-line table after its manifest'
 
+# The role column, one line per slot in slot order, from its own section so
+# the twenty table lines stay as every other projection reads them. A
+# protected operation is documented with its security requirement and the two
+# answers admission can give it — never left looking public.
+printf '%s\n' "$output" | grep -qx 'requires' ||
+    fail 'the router printed no requires section'
+requires=$(printf '%s\n' "$output" | sed -n '/^requires$/,/^end requires$/p' | sed '1d;$d')
+test "$(printf '%s\n' "$requires" | wc -l)" -eq 5 ||
+    fail 'the requires section does not hold one role per slot'
+
 # The one seam the slice forces: the table carries path codes because a record
 # cannot hold Text. Names live here, and every code must have one — a route
 # added without a name fails rather than appearing as a number.
@@ -60,6 +70,15 @@ path_name() {
     esac
 }
 
+role_name() {
+    case $1 in
+        0) printf 'public' ;;
+        1) printf 'member' ;;
+        2) printf 'admin' ;;
+        *) return 1 ;;
+    esac
+}
+
 method_name() {
     case $1 in
         1) printf 'get' ;;
@@ -71,6 +90,13 @@ method_name() {
 # Group by path so each path object carries all its methods, which is what
 # makes the document say the same thing the Allow set says.
 codes=$(printf '%s\n' "$table" | paste - - - - | awk '{print $2}' | sort -un)
+requires_file=$(mktemp "${TMPDIR:-/tmp}/kofun-boot-openapi.XXXXXX")
+trap 'rm -f "$requires_file"' 0 1 2 15
+printf '%s\n' "$requires" >"$requires_file"
+rows=$(printf '%s\n' "$table" | paste - - - - | paste - "$requires_file")
+for role in $(printf '%s\n' "$requires"); do
+    role_name "$role" >/dev/null || fail "role code $role is not in the contract"
+done
 
 # Resolve every name first, so an unknown code stops the run instead of
 # producing a document with a hole in it.
@@ -90,8 +116,8 @@ printf '  version: 0.1.0\n'
 printf 'paths:\n'
 for code in $codes; do
     printf '  %s:\n' "$(path_name "$code")"
-    printf '%s\n' "$table" | paste - - - - |
-    while IFS='	' read -r method path handler capture; do
+    printf '%s\n' "$rows" |
+    while IFS='	' read -r method path handler capture role; do
         test "$path" = "$code" || continue
         printf '    %s:\n' "$(method_name "$method")"
         printf '      operationId: handler%s\n' "$handler"
@@ -104,10 +130,26 @@ for code in $codes; do
             printf '          required: true\n'
             printf '          schema: { type: integer }\n'
         fi
+        if test "$role" != 0; then
+            printf '      security:\n'
+            printf '        - bearer: []\n'
+            printf '      x-kofun-requires: %s\n' "$(role_name "$role")"
+        fi
         printf '      responses:\n'
         printf '        "200": { description: ok }\n'
+        if test "$role" != 0; then
+            printf '        "401": { description: no authenticated caller }\n'
+            printf '        "403": { description: "the caller holds a role below %s" }\n' "$(role_name "$role")"
+        fi
         printf '        "404": { description: no route matched }\n'
         printf '        "405": { description: method not allowed }\n'
         printf '        "413": { description: body over the limit }\n'
     done
 done
+if printf '%s\n' "$requires" | grep -qv '^0$'; then
+    printf 'components:\n'
+    printf '  securitySchemes:\n'
+    printf '    bearer:\n'
+    printf '      type: http\n'
+    printf '      scheme: bearer\n'
+fi

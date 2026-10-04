@@ -14,8 +14,13 @@ paths:
   /sum:
     post:
       operationId: handler2
+      security:
+        - bearer: []
+      x-kofun-requires: member
       responses:
         "200": { description: ok }
+        "401": { description: no authenticated caller }
+        "403": { description: "the caller holds a role below member" }
         "404": { description: no route matched }
         "405": { description: method not allowed }
         "413": { description: body over the limit }
@@ -42,8 +47,18 @@ paths:
           in: path
           required: true
           schema: { type: integer }
+      security:
+        - bearer: []
+      x-kofun-requires: admin
       responses:
         "200": { description: ok }
+        "401": { description: no authenticated caller }
+        "403": { description: "the caller holds a role below admin" }
         "404": { description: no route matched }
         "405": { description: method not allowed }
         "413": { description: body over the limit }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer

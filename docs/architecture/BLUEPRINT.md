@@ -143,7 +143,16 @@ core は `Principal(` を構成できない。これは FCIS gate の
 順序を差し替えても、header を偽造しても、無い引数は作れない。
 dispatch の順序（size → route → method）は、既に gate が読んでいる。
 
-**状態。** capability と FCIS gate は成立している。`Principal` は [#54](https://github.com/kofun-lang/kofun-boot/issues/54)。
+**状態。** 成立している（[#54](https://github.com/kofun-lang/kofun-boot/issues/54)）。
+
+- route slot は必要な role を宣言する。
+- `admit` が dispatch の四段目として、caller を名指しで判定する。
+  - 401（`Unauthenticated`）、403（`Forbidden(role)`）を返し、5xx は返さない。
+  - 先の段の拒否は `NotRouted` として素通しする。
+- core が `Principal(` を構成すると、architecture gate が行番号付きで拒否する。
+- OpenAPI は保護された操作に `security` と 401/403 を投影する。
+
+socket での header 規則は [#61](https://github.com/kofun-lang/kofun-boot/issues/61) に分けた。
 
 ## 4. Schema — Drizzle の場所に、Prisma の成果物を
 
