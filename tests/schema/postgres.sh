@@ -35,6 +35,12 @@ sed 's/^    email text not null, -- key 2$/    email text, -- key 2/' \
     "$PG_WORK/schema.sql" >"$PG_WORK/broken.sql"
 cmp -s "$PG_WORK/schema.sql" "$PG_WORK/broken.sql" &&
     fail 'the negative control changed nothing; its sed no longer matches contracts/schema.sql'
+# And one with the reference removed: a foreign key the dump did not compare
+# would be a reference the gate cannot see.
+sed 's/^    author_id bigint not null references users (id), -- key 2$/    author_id bigint not null, -- key 2/' \
+    "$PG_WORK/schema.sql" >"$PG_WORK/unreferenced.sql"
+cmp -s "$PG_WORK/schema.sql" "$PG_WORK/unreferenced.sql" &&
+    fail 'the reference control changed nothing; its sed no longer matches contracts/schema.sql'
 
 pg_start
 
@@ -59,16 +65,22 @@ build() {
 build from_history migrations.sql
 build from_declaration schema.sql
 build from_broken broken.sql
+build from_unreferenced unreferenced.sql
 
 grep -q '^CREATE TABLE public.users' "$PG_WORK/from_history.schema" ||
     fail 'the database built from the history has no users table; the comparison would be vacuous'
+grep -q 'FOREIGN KEY (author_id) REFERENCES public.users(id)' "$PG_WORK/from_history.schema" ||
+    fail 'the database built from the history has no posts.author_id reference; the comparison would miss it'
 cmp -s "$PG_WORK/from_history.schema" "$PG_WORK/from_declaration.schema" ||
     fail "the history and the declared DDL build different databases:
 $(diff "$PG_WORK/from_history.schema" "$PG_WORK/from_declaration.schema")"
 if cmp -s "$PG_WORK/from_history.schema" "$PG_WORK/from_broken.schema"; then
     fail 'a declared DDL with a NOT NULL removed built the same database; the comparison cannot fail'
 fi
+if cmp -s "$PG_WORK/from_history.schema" "$PG_WORK/from_unreferenced.schema"; then
+    fail 'a declared DDL with its reference removed built the same database; the comparison cannot see references'
+fi
 
 printf 'schema-postgres: %s\n' "$(pg_version)"
 printf 'schema-postgres: migrations.sql and schema.sql build the same database: PASS\n'
-printf 'schema-postgres: a declared DDL missing one NOT NULL builds a different one: PASS\n'
+printf 'schema-postgres: a declared DDL missing one NOT NULL, or its reference, builds a different one: PASS\n'

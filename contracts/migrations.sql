@@ -4,27 +4,44 @@
 -- dialect: postgresql
 -- contract: 1
 
--- step 1: create table (primary key 1)
+-- step 1: create table users (primary key 1)
 create table users (
     id bigint not null, -- key 1
     primary key (id)
 );
 
--- step 2: add column (key 2)
+-- step 2: add column to users (key 2)
 alter table users add column email text;
 
--- step 3: add column (key 3)
+-- step 3: add column to users (key 3)
 alter table users add column name text;
 
--- step 4: add column (key 4)
+-- step 4: add column to users (key 4)
 alter table users add column nickname text;
 
--- step 5: rename column (key 3)
+-- step 5: rename column of users (key 3)
 alter table users rename column name to display_name;
 
--- step 6: set not null (key 2), policy backfilled
+-- step 6: set not null on users (key 2), policy backfilled
 -- precondition: every existing row already holds a value
 alter table users alter column email set not null;
 
--- step 7: drop column (key 4), policy discard: its data is destroyed
+-- step 7: drop column of users (key 4), policy discard: its data is destroyed
 alter table users drop column nickname;
+
+-- step 8: create table posts (primary key 1)
+create table posts (
+    id bigint not null, -- key 1
+    primary key (id)
+);
+
+-- step 9: add column to posts (key 2)
+-- policy backfilled: the plan supplies the value for existing
+-- rows; this projection does not invent one
+alter table posts add column author_id bigint not null references users (id);
+
+-- step 10: add column to posts (key 3)
+alter table posts add column views integer;
+
+-- step 11: widen kind on posts (key 3); every value is kept
+alter table posts alter column views type bigint;

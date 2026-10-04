@@ -60,3 +60,9 @@ for the same reason: identity that is reused is identity that lies.
 Keys do not appear in SQL. The DDL projection prints them as comments
 (`-- key 3`) and lists retired keys at the end. The database never needs them;
 the declaration and the history do.
+
+The rule extends to references ([#47](https://github.com/kofun-lang/kofun-boot/issues/47)).
+A foreign key names the other table's key, not its column name, so renaming
+the referenced column needs no migration of the referencing one. A reference
+must name the other table's live primary key, of the same kind, or the add is
+refused as `DanglingReference(key)`.

@@ -70,6 +70,7 @@ section() {
 table_name() {
     case $1 in
         1) printf 'users' ;;
+        2) printf 'posts' ;;
         *) return 1 ;;
     esac
 }
@@ -81,6 +82,8 @@ column_name() {
         3) printf 'name' ;;
         4) printf 'display_name' ;;
         5) printf 'nickname' ;;
+        6) printf 'author_id' ;;
+        7) printf 'views' ;;
         *) return 1 ;;
     esac
 }
@@ -90,6 +93,7 @@ kind_name() {
         1) printf 'bigint' ;;
         2) printf 'text' ;;
         3) printf 'boolean' ;;
+        4) printf 'integer' ;;
         *) return 1 ;;
     esac
 }
@@ -132,48 +136,69 @@ OUT="$WORK/sql"
 
 project_schema() {
     section schema >"$WORK/schema"
-    test "$(wc -l <"$WORK/schema" | tr -d ' ')" -eq 24 ||
-        fail 'the schema section is not four header lines and four five-line keys'
+    test "$(wc -l <"$WORK/schema" | tr -d ' ')" -eq 56 ||
+        fail 'the schema section is not two tables of four header lines and four six-line keys'
 
-    table=$(sed -n 1p "$WORK/schema")
-    primary=$(sed -n 2p "$WORK/schema")
-    need_table "$table"
-    sed -n '5,$p' "$WORK/schema" | paste - - - - - >"$WORK/columns"
+    # Two tables of 28 lines each: four header lines, then four six-line keys.
+    for offset in 0 28; do
+        table=$(sed -n "$((offset + 1))p" "$WORK/schema")
+        need_table "$table"
+        sed -n "$((offset + 5)),$((offset + 28))p" "$WORK/schema" |
+            paste - - - - - - >"$WORK/columns.$table"
+    done
 
-    retired=''
-    primary_name=''
-    while IFS='	' read -r key label kind nullable state; do
-        case $state in
-            1)
-                need_column "$label"
-                need_kind "$kind"
-                if test "$key" = "$primary"; then
-                    primary_name=$(column_name "$label")
-                fi
-                ;;
-            2) retired="$retired $key" ;;
-            0) ;;
-            *) fail "key $key has an unknown slot state $state" ;;
-        esac
-    done <"$WORK/columns"
-    test -n "$primary_name" || fail "primary key $primary is not a live column"
+    # Resolve everything first. A reference names the other table's key; the
+    # projection writes it with that key's current name, which is all SQL
+    # can say, and orders tables so a referenced one is created first.
+    for table in 1 2; do
+        while IFS='	' read -r key label kind nullable state ref; do
+            case $state in
+                1)
+                    need_column "$label"
+                    need_kind "$kind"
+                    if test "$ref" != 0; then
+                        test "$table" = 2 ||
+                            fail "table $table references a later table; the projection creates tables in code order"
+                    fi
+                    ;;
+                0|2) ;;
+                *) fail "table $table key $key has an unknown slot state $state" ;;
+            esac
+        done <"$WORK/columns.$table"
+    done
 
     {
         header 'declared schema'
-        printf '\n'
-        printf 'create table %s (\n' "$(table_name "$table")"
-        while IFS='	' read -r key label kind nullable state; do
-            test "$state" = 1 || continue
-            printf '    %s %s%s, -- key %s\n' \
-                "$(column_name "$label")" "$(kind_name "$kind")" \
-                "$(null_clause "$nullable")" "$key"
-        done <"$WORK/columns"
-        printf '    primary key (%s)\n' "$primary_name"
-        printf ');\n'
-        if test -n "$retired"; then
+        for offset in 0 28; do
+            table=$(sed -n "$((offset + 1))p" "$WORK/schema")
+            primary=$(sed -n "$((offset + 2))p" "$WORK/schema")
+            other=$((3 - table))
+            primary_name=$(awk -F'\t' -v k="$primary" '$1 == k && $5 == 1 { print $2 }' "$WORK/columns.$table")
+            test -n "$primary_name" || fail "table $table's primary key $primary is not a live column"
             printf '\n'
-            printf -- '-- retired keys, never to be reissued:%s\n' "$retired"
-        fi
+            printf 'create table %s (\n' "$(table_name "$table")"
+            retired=''
+            while IFS='	' read -r key label kind nullable state ref; do
+                if test "$state" = 2; then
+                    retired="$retired $key"
+                fi
+                test "$state" = 1 || continue
+                references=''
+                if test "$ref" != 0; then
+                    target=$(awk -F'\t' -v k="$ref" '$1 == k && $5 == 1 { print $2 }' "$WORK/columns.$other")
+                    test -n "$target" || fail "table $table key $key references key $ref, which is not live"
+                    references=" references $(table_name "$other") ($(column_name "$target"))"
+                fi
+                printf '    %s %s%s%s, -- key %s\n' \
+                    "$(column_name "$label")" "$(kind_name "$kind")" \
+                    "$(null_clause "$nullable")" "$references" "$key"
+            done <"$WORK/columns.$table"
+            printf '    primary key (%s)\n' "$(column_name "$primary_name")"
+            printf ');\n'
+            if test -n "$retired"; then
+                printf -- '-- %s: retired keys, never to be reissued:%s\n' "$(table_name "$table")" "$retired"
+            fi
+        done
     } >"$OUT"
 }
 
@@ -185,15 +210,17 @@ project_migrations() {
     case $count in
         ''|*[!0-9]*) fail 'the history section does not open with a step count' ;;
     esac
-    test "$(sed -n '2,$p' "$WORK/history" | wc -l | tr -d ' ')" -eq $((count * 11)) ||
-        fail "the history section does not hold $count eleven-line steps"
-    sed -n '2,$p' "$WORK/history" | paste - - - - - - - - - - - >"$WORK/steps"
+    test "$(sed -n '2,$p' "$WORK/history" | wc -l | tr -d ' ')" -eq $((count * 12)) ||
+        fail "the history section does not hold $count twelve-line steps"
+    sed -n '2,$p' "$WORK/history" | paste - - - - - - - - - - - - >"$WORK/steps"
 
     # Resolve every code first, and refuse a refused step: SQL for a step the
     # core declined would describe a database that never existed.
-    while IFS='	' read -r step kind table key label column_kind nullable policy outcome payload live; do
-        test "$outcome" -ge 1 && test "$outcome" -le 5 ||
-            fail "history step $step was refused by the core (outcome $outcome); there is no SQL for it"
+    while IFS='	' read -r step kind table key label column_kind nullable policy ref outcome payload live; do
+        case $outcome in
+            1|2|3|4|5|16) ;;
+            *) fail "history step $step was refused by the core (outcome $outcome); there is no SQL for it" ;;
+        esac
         need_table "$table"
         case $kind in
             1|2)
@@ -202,23 +229,25 @@ project_migrations() {
                 ;;
             3) need_column "$label" ;;
             4|5) ;;
+            6) need_kind "$column_kind" ;;
             *) fail "history step $step has an unknown migration kind $kind" ;;
         esac
     done <"$WORK/steps"
 
-    # The name each key holds as the history advances. A rename reads the old
-    # name from here; nothing reads it from the step, because the step only
-    # knows the key.
+    # The name each (table, key) holds as the history advances. A rename or a
+    # reference reads the current name from here; nothing reads it from the
+    # step, because the step only knows the key.
     {
         header 'migration history'
-        while IFS='	' read -r step kind table key label column_kind nullable policy outcome payload live; do
+        while IFS='	' read -r step kind table key label column_kind nullable policy ref outcome payload live; do
             tname=$(table_name "$table")
+            other=$((3 - table))
             printf '\n'
             case $kind in
                 1)
                     cname=$(column_name "$label")
-                    eval "name_$key=\$cname"
-                    printf -- '-- step %s: create table (primary key %s)\n' "$step" "$key"
+                    eval "name_${table}_$key=\$cname"
+                    printf -- '-- step %s: create table %s (primary key %s)\n' "$step" "$tname" "$key"
                     printf 'create table %s (\n' "$tname"
                     printf '    %s %s not null, -- key %s\n' "$cname" "$(kind_name "$column_kind")" "$key"
                     printf '    primary key (%s)\n' "$cname"
@@ -226,40 +255,63 @@ project_migrations() {
                     ;;
                 2)
                     cname=$(column_name "$label")
-                    eval "name_$key=\$cname"
-                    printf -- '-- step %s: add column (key %s)\n' "$step" "$key"
+                    eval "name_${table}_$key=\$cname"
+                    references=''
+                    if test "$ref" != 0; then
+                        eval "target=\${name_${other}_$ref:-}"
+                        test -n "$target" || fail "history step $step references key $ref of $(table_name "$other"), which no earlier step named"
+                        references=" references $(table_name "$other") ($target)"
+                    fi
+                    printf -- '-- step %s: add column to %s (key %s)\n' "$step" "$tname" "$key"
                     if test "$nullable" = 0; then
                         printf -- '-- policy backfilled: the plan supplies the value for existing\n'
                         printf -- '-- rows; this projection does not invent one\n'
                     fi
-                    printf 'alter table %s add column %s %s%s;\n' \
-                        "$tname" "$cname" "$(kind_name "$column_kind")" "$(null_clause "$nullable")"
+                    printf 'alter table %s add column %s %s%s%s;\n' \
+                        "$tname" "$cname" "$(kind_name "$column_kind")" "$(null_clause "$nullable")" "$references"
                     ;;
                 3)
-                    eval "old=\${name_$key:-}"
+                    eval "old=\${name_${table}_$key:-}"
                     test -n "$old" || fail "history step $step renames key $key, which no earlier step named"
                     cname=$(column_name "$label")
-                    eval "name_$key=\$cname"
-                    printf -- '-- step %s: rename column (key %s)\n' "$step" "$key"
+                    eval "name_${table}_$key=\$cname"
+                    printf -- '-- step %s: rename column of %s (key %s)\n' "$step" "$tname" "$key"
                     printf 'alter table %s rename column %s to %s;\n' "$tname" "$old" "$cname"
                     ;;
                 4)
-                    eval "old=\${name_$key:-}"
+                    eval "old=\${name_${table}_$key:-}"
                     test -n "$old" || fail "history step $step drops key $key, which no earlier step named"
-                    printf -- '-- step %s: drop column (key %s), policy discard: its data is destroyed\n' \
-                        "$step" "$key"
+                    printf -- '-- step %s: drop column of %s (key %s), policy discard: its data is destroyed\n' \
+                        "$step" "$tname" "$key"
                     printf 'alter table %s drop column %s;\n' "$tname" "$old"
                     ;;
                 5)
-                    eval "old=\${name_$key:-}"
+                    eval "old=\${name_${table}_$key:-}"
                     test -n "$old" || fail "history step $step alters key $key, which no earlier step named"
                     if test "$nullable" = 0; then
-                        printf -- '-- step %s: set not null (key %s), policy backfilled\n' "$step" "$key"
+                        printf -- '-- step %s: set not null on %s (key %s), policy backfilled\n' "$step" "$tname" "$key"
                         printf -- '-- precondition: every existing row already holds a value\n'
                         printf 'alter table %s alter column %s set not null;\n' "$tname" "$old"
                     else
-                        printf -- '-- step %s: drop not null (key %s)\n' "$step" "$key"
+                        printf -- '-- step %s: drop not null on %s (key %s)\n' "$step" "$tname" "$key"
                         printf 'alter table %s alter column %s drop not null;\n' "$tname" "$old"
+                    fi
+                    ;;
+                6)
+                    eval "old=\${name_${table}_$key:-}"
+                    test -n "$old" || fail "history step $step changes the kind of key $key, which no earlier step named"
+                    if test "$policy" = 1; then
+                        # A narrowing under Discard: every value becomes null,
+                        # which the core allowed only because the column is
+                        # nullable.
+                        printf -- '-- step %s: change kind on %s (key %s), policy discard: its values become null\n' \
+                            "$step" "$tname" "$key"
+                        printf 'alter table %s alter column %s type %s using null;\n' \
+                            "$tname" "$old" "$(kind_name "$column_kind")"
+                    else
+                        printf -- '-- step %s: widen kind on %s (key %s); every value is kept\n' "$step" "$tname" "$key"
+                        printf 'alter table %s alter column %s type %s;\n' \
+                            "$tname" "$old" "$(kind_name "$column_kind")"
                     fi
                     ;;
             esac

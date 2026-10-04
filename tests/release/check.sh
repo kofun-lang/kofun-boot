@@ -217,7 +217,7 @@ fi
 grep -Fq 'history step 2 was released at v0.0.1 and has changed' "$WORK/lock/edited.log" ||
     fail "the edited released step was not named: $(cat "$WORK/lock/edited.log")"
 
-sed 's/^-- step 2: add column (key 2)$/-- step 2: add column (key 2), reworded/' \
+sed 's/^-- step 2: add column to users (key 2)$/-- step 2: add column to users (key 2), reworded/' \
     "$WORK/lock/migrations.sql" >"$WORK/lock/comment.sql"
 cmp -s "$WORK/lock/migrations.sql" "$WORK/lock/comment.sql" &&
     fail 'the comment break changed nothing; its sed no longer matches contracts/migrations.sql'

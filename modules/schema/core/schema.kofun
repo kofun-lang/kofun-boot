@@ -30,11 +30,13 @@
 # and may not construct a capability or own an entry point. The gate reads it
 # with comments stripped and enforces both.
 #
-# Bounded to one table of four column keys, the way the mock bounds itself to
-# four rows. ../contract/schema.kofun holds the canonical surface — tables in
-# a List, names as Text, policies that carry their expression — and this
-# projects it into the Stage 2 slice without changing one decision. The gate
-# compares the closed outcome blocks exactly.
+# Bounded to two tables of four column keys each, the way the mock bounds
+# itself to four rows. A record in this slice cannot hold another record, so a
+# table is one `Schema` value and the database is two of them, computed by
+# `table_after` from the history. ../contract/schema.kofun holds the canonical
+# surface — tables in a List, names as Text, policies that carry their
+# expression — and this projects it into the Stage 2 slice without changing
+# one decision. The gate compares the closed outcome blocks exactly.
 
 # ------------------------------------------------------------- constants
 
@@ -69,6 +71,38 @@ fn kind_text() -> Int {
 
 fn kind_boolean() -> Int {
     return 3
+}
+
+fn kind_integer() -> Int {
+    return 4
+}
+
+# Whether a kind change keeps every value: the new kind can hold whatever the
+# old one held, and PostgreSQL converts it without a USING clause. Anything
+# else may lose or reject data, so it needs a policy.
+fn widens(from: Int, to: Int) -> Int {
+    if from == to {
+        return 1
+    }
+    if from == kind_integer() {
+        if to == kind_bigint() {
+            return 1
+        }
+        if to == kind_text() {
+            return 1
+        }
+    }
+    if from == kind_bigint() {
+        if to == kind_text() {
+            return 1
+        }
+    }
+    if from == kind_boolean() {
+        if to == kind_text() {
+            return 1
+        }
+    }
+    return 0
 }
 
 # Policies. A step that can lose data or fail on existing rows must name the
@@ -113,6 +147,10 @@ fn step_drop_column() -> Int {
 
 fn step_set_nullable() -> Int {
     return 5
+}
+
+fn step_alter_kind() -> Int {
+    return 6
 }
 
 # Outcomes. Every one carries what was observed.
@@ -176,6 +214,18 @@ fn outcome_full() -> Int {
     return 15
 }
 
+fn outcome_kind_changed() -> Int {
+    return 16
+}
+
+fn outcome_dangling_reference() -> Int {
+    return 17
+}
+
+fn outcome_in_reference() -> Int {
+    return 18
+}
+
 fn drift_in_sync() -> Int {
     return 1
 }
@@ -186,9 +236,10 @@ fn drift_diverged() -> Int {
 
 # ---------------------------------------------------------------- values
 
-# The whole schema. `table` is the table's label, or 0 before CreateTable;
-# `primary` is the key of the column the table was created with. Then one
-# slot per key: the column's label, kind, nullability, and slot state.
+# One table. `table` is the table's code, or 0 before CreateTable; `primary`
+# is the key of the column the table was created with. Then one slot per key:
+# the column's label, kind, nullability, slot state, and `ref` — the key of
+# the other table's primary key that this column references, or 0.
 type Schema = {
     table: Int,
     primary: Int,
@@ -196,18 +247,22 @@ type Schema = {
     c1_kind: Int,
     c1_nullable: Int,
     c1_state: Int,
+    c1_ref: Int,
     c2_label: Int,
     c2_kind: Int,
     c2_nullable: Int,
     c2_state: Int,
+    c2_ref: Int,
     c3_label: Int,
     c3_kind: Int,
     c3_nullable: Int,
     c3_state: Int,
+    c3_ref: Int,
     c4_label: Int,
     c4_kind: Int,
     c4_nullable: Int,
     c4_state: Int,
+    c4_ref: Int,
 }
 
 # One migration step. The canonical contract makes this a closed sum with one
@@ -221,11 +276,15 @@ type Migration = {
     column_kind: Int,
     nullable: Int,
     policy: Int,
+    ref: Int,
 }
 
-# The closed outcome domain. Five answers apply a step; the other ten refuse
+# The closed outcome domain. Six answers apply a step; the other twelve refuse
 # it, and a refusal leaves the schema exactly as it was. `NameTaken` carries
 # the label that collided; `Full` carries the capacity that was reached.
+# `DanglingReference` is an add whose reference names no live primary key of
+# the other table, or one of another kind; `InReference` is a kind change on
+# a column that takes part in a reference.
 type SchemaOutcome =
     | TableCreated(table: Int)
     | ColumnAdded(key: Int)
@@ -242,6 +301,9 @@ type SchemaOutcome =
     | Destructive(key: Int)
     | NeedsBackfill(key: Int)
     | Full(capacity: Int)
+    | KindChanged(key: Int)
+    | DanglingReference(key: Int)
+    | InReference(key: Int)
 
 # Whether the schema a history replays to is the schema the application
 # declares. `Diverged` names the first key that differs, or 0 for the table.
@@ -258,18 +320,22 @@ type SchemaStep = {
     c1_kind: Int,
     c1_nullable: Int,
     c1_state: Int,
+    c1_ref: Int,
     c2_label: Int,
     c2_kind: Int,
     c2_nullable: Int,
     c2_state: Int,
+    c2_ref: Int,
     c3_label: Int,
     c3_kind: Int,
     c3_nullable: Int,
     c3_state: Int,
+    c3_ref: Int,
     c4_label: Int,
     c4_kind: Int,
     c4_nullable: Int,
     c4_state: Int,
+    c4_ref: Int,
     outcome: Int,
     payload: Int,
 }
@@ -319,6 +385,15 @@ fn outcome_of(kind: Int, payload: Int) -> SchemaOutcome {
     if kind == outcome_full() {
         return Full(payload)
     }
+    if kind == outcome_kind_changed() {
+        return KindChanged(payload)
+    }
+    if kind == outcome_dangling_reference() {
+        return DanglingReference(payload)
+    }
+    if kind == outcome_in_reference() {
+        return InReference(payload)
+    }
     return TableCreated(payload)
 }
 
@@ -340,6 +415,9 @@ fn outcome_kind(outcome: SchemaOutcome) -> Int {
         Destructive(_) => { kind = outcome_destructive() },
         NeedsBackfill(_) => { kind = outcome_needs_backfill() },
         Full(_) => { kind = outcome_full() },
+        KindChanged(_) => { kind = outcome_kind_changed() },
+        DanglingReference(_) => { kind = outcome_dangling_reference() },
+        InReference(_) => { kind = outcome_in_reference() },
     }
     return kind
 }
@@ -362,6 +440,9 @@ fn outcome_payload(outcome: SchemaOutcome) -> Int {
         Destructive(key) => { payload = key },
         NeedsBackfill(key) => { payload = key },
         Full(capacity) => { payload = capacity },
+        KindChanged(key) => { payload = key },
+        DanglingReference(key) => { payload = key },
+        InReference(key) => { payload = key },
     }
     return payload
 }
@@ -387,6 +468,9 @@ fn outcome_applied(outcome: SchemaOutcome) -> Int {
         Destructive(_) => { result = 0 },
         NeedsBackfill(_) => { result = 0 },
         Full(_) => { result = 0 },
+        KindChanged(_) => { result = 1 },
+        DanglingReference(_) => { result = 0 },
+        InReference(_) => { result = 0 },
     }
     return result
 }
@@ -450,6 +534,13 @@ fn nullable_at(schema: Schema, key: Int) -> Int {
         + eq(key, 4) * schema.c4_nullable
 }
 
+fn ref_at(schema: Schema, key: Int) -> Int {
+    return eq(key, 1) * schema.c1_ref
+        + eq(key, 2) * schema.c2_ref
+        + eq(key, 3) * schema.c3_ref
+        + eq(key, 4) * schema.c4_ref
+}
+
 fn is_live(schema: Schema, key: Int) -> Int {
     return eq(state_at(schema, key), slot_live())
 }
@@ -498,18 +589,22 @@ fn empty_schema() -> Schema {
         c1_kind: 0,
         c1_nullable: 0,
         c1_state: slot_empty(),
+        c1_ref: 0,
         c2_label: 0,
         c2_kind: 0,
         c2_nullable: 0,
         c2_state: slot_empty(),
+        c2_ref: 0,
         c3_label: 0,
         c3_kind: 0,
         c3_nullable: 0,
         c3_state: slot_empty(),
+        c3_ref: 0,
         c4_label: 0,
         c4_kind: 0,
         c4_nullable: 0,
-        c4_state: slot_empty()
+        c4_state: slot_empty(),
+        c4_ref: 0
     )
     return schema
 }
@@ -523,6 +618,20 @@ fn migration(
     nullable: Int,
     policy: Int
 ) -> Migration {
+    return referencing(kind, table, key, label, column_kind, nullable, policy, 0)
+}
+
+# A migration whose column references the other table's key `ref`.
+fn referencing(
+    kind: Int,
+    table: Int,
+    key: Int,
+    label: Int,
+    column_kind: Int,
+    nullable: Int,
+    policy: Int,
+    ref: Int
+) -> Migration {
     let step: Migration = Migration(
         kind: kind,
         table: table,
@@ -530,7 +639,8 @@ fn migration(
         label: label,
         column_kind: column_kind,
         nullable: nullable,
-        policy: policy
+        policy: policy,
+        ref: ref
     )
     return step
 }
@@ -549,18 +659,22 @@ fn step_of(schema: Schema, outcome: Int, payload: Int) -> SchemaStep {
         c1_kind: schema.c1_kind,
         c1_nullable: schema.c1_nullable,
         c1_state: schema.c1_state,
+        c1_ref: schema.c1_ref,
         c2_label: schema.c2_label,
         c2_kind: schema.c2_kind,
         c2_nullable: schema.c2_nullable,
         c2_state: schema.c2_state,
+        c2_ref: schema.c2_ref,
         c3_label: schema.c3_label,
         c3_kind: schema.c3_kind,
         c3_nullable: schema.c3_nullable,
         c3_state: schema.c3_state,
+        c3_ref: schema.c3_ref,
         c4_label: schema.c4_label,
         c4_kind: schema.c4_kind,
         c4_nullable: schema.c4_nullable,
         c4_state: schema.c4_state,
+        c4_ref: schema.c4_ref,
         outcome: outcome,
         payload: payload
     )
@@ -576,18 +690,22 @@ fn step_schema(step: SchemaStep) -> Schema {
         c1_kind: step.c1_kind,
         c1_nullable: step.c1_nullable,
         c1_state: step.c1_state,
+        c1_ref: step.c1_ref,
         c2_label: step.c2_label,
         c2_kind: step.c2_kind,
         c2_nullable: step.c2_nullable,
         c2_state: step.c2_state,
+        c2_ref: step.c2_ref,
         c3_label: step.c3_label,
         c3_kind: step.c3_kind,
         c3_nullable: step.c3_nullable,
         c3_state: step.c3_state,
+        c3_ref: step.c3_ref,
         c4_label: step.c4_label,
         c4_kind: step.c4_kind,
         c4_nullable: step.c4_nullable,
-        c4_state: step.c4_state
+        c4_state: step.c4_state,
+        c4_ref: step.c4_ref
     )
     return schema
 }
@@ -610,47 +728,56 @@ fn with_column(
     label: Int,
     kind: Int,
     nullable: Int,
-    state: Int
+    state: Int,
+    ref: Int
 ) -> Schema {
     let mut a_label = schema.c1_label
     let mut a_kind = schema.c1_kind
     let mut a_nullable = schema.c1_nullable
     let mut a_state = schema.c1_state
+    let mut a_ref = schema.c1_ref
     let mut b_label = schema.c2_label
     let mut b_kind = schema.c2_kind
     let mut b_nullable = schema.c2_nullable
     let mut b_state = schema.c2_state
+    let mut b_ref = schema.c2_ref
     let mut c_label = schema.c3_label
     let mut c_kind = schema.c3_kind
     let mut c_nullable = schema.c3_nullable
     let mut c_state = schema.c3_state
+    let mut c_ref = schema.c3_ref
     let mut d_label = schema.c4_label
     let mut d_kind = schema.c4_kind
     let mut d_nullable = schema.c4_nullable
     let mut d_state = schema.c4_state
+    let mut d_ref = schema.c4_ref
     if key == 1 {
         a_label = label
         a_kind = kind
         a_nullable = nullable
         a_state = state
+        a_ref = ref
     }
     if key == 2 {
         b_label = label
         b_kind = kind
         b_nullable = nullable
         b_state = state
+        b_ref = ref
     }
     if key == 3 {
         c_label = label
         c_kind = kind
         c_nullable = nullable
         c_state = state
+        c_ref = ref
     }
     if key == 4 {
         d_label = label
         d_kind = kind
         d_nullable = nullable
         d_state = state
+        d_ref = ref
     }
     let written: Schema = Schema(
         table: table,
@@ -659,18 +786,22 @@ fn with_column(
         c1_kind: a_kind,
         c1_nullable: a_nullable,
         c1_state: a_state,
+        c1_ref: a_ref,
         c2_label: b_label,
         c2_kind: b_kind,
         c2_nullable: b_nullable,
         c2_state: b_state,
+        c2_ref: b_ref,
         c3_label: c_label,
         c3_kind: c_kind,
         c3_nullable: c_nullable,
         c3_state: c_state,
+        c3_ref: c_ref,
         c4_label: d_label,
         c4_kind: d_kind,
         c4_nullable: d_nullable,
-        c4_state: d_state
+        c4_state: d_state,
+        c4_ref: d_ref
     )
     return written
 }
@@ -685,18 +816,37 @@ fn existing_key_refusal(schema: Schema, key: Int) -> SchemaStep {
     return unchanged(schema, outcome_key_unknown(), key)
 }
 
+# Whether a reference from this table may name `ref` in `other`: the other
+# table exists, `ref` is its live primary key, and the kinds match. A
+# reference names a key, never a column name, so a later rename of the
+# referenced column needs no migration of this one.
+fn reference_holds(other: Schema, ref: Int, kind: Int) -> Int {
+    if other.table == 0 {
+        return 0
+    }
+    if ref != other.primary {
+        return 0
+    }
+    if is_live(other, ref) == 0 {
+        return 0
+    }
+    return eq(kind_at(other, ref), kind)
+}
+
 # ---------------------------------------------------------------- apply
 #
-# Every migration kind, as one total function. The order of the checks is the
-# contract, the way the router's is size before route before method:
+# Every migration kind, as one total function. `other` is the second table,
+# read only: a reference is checked against it, and nothing here can change
+# it. The order of the checks is the contract, the way the router's is size
+# before route before method:
 #
-#   table → key range → key state → primary key → name → policy
+#   table → key range → key state → primary key → reference → name → policy
 #
 # so a step is refused for the most structural reason it has, and the answer
 # for a given schema and step never depends on which check happened to run
 # first in some other version of this file.
 
-fn apply(schema: Schema, step: Migration) -> SchemaStep {
+fn apply(schema: Schema, other: Schema, step: Migration) -> SchemaStep {
     if step.kind == step_create_table() {
         if schema.table != 0 {
             return unchanged(schema, outcome_table_exists(), schema.table)
@@ -718,7 +868,8 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
             step.label,
             step.column_kind,
             0,
-            slot_live()
+            slot_live(),
+            0
         )
         return step_of(created, outcome_table_created(), step.table)
     }
@@ -745,6 +896,11 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
         if state_at(schema, step.key) == slot_retired() {
             return unchanged(schema, outcome_key_retired(), step.key)
         }
+        if step.ref != 0 {
+            if reference_holds(other, step.ref, step.column_kind) == 0 {
+                return unchanged(schema, outcome_dangling_reference(), step.key)
+            }
+        }
         if label_holders(schema, step.label, step.key) > 0 {
             return unchanged(schema, outcome_name_taken(), step.label)
         }
@@ -763,7 +919,8 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
             step.label,
             step.column_kind,
             step.nullable,
-            slot_live()
+            slot_live(),
+            step.ref
         )
         return step_of(added, outcome_column_added(), step.key)
     }
@@ -775,8 +932,8 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
         if label_holders(schema, step.label, step.key) > 0 {
             return unchanged(schema, outcome_name_taken(), step.label)
         }
-        # The key is kept: this is what makes a rename a rename. Kind and
-        # nullability are read from the slot, not from the step.
+        # The key is kept: this is what makes a rename a rename. Kind,
+        # nullability, and reference are read from the slot, not the step.
         let renamed: Schema = with_column(
             schema,
             schema.table,
@@ -785,7 +942,8 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
             step.label,
             kind_at(schema, step.key),
             nullable_at(schema, step.key),
-            slot_live()
+            slot_live(),
+            ref_at(schema, step.key)
         )
         return step_of(renamed, outcome_column_renamed(), step.key)
     }
@@ -810,7 +968,8 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
             0,
             0,
             0,
-            slot_retired()
+            slot_retired(),
+            0
         )
         return step_of(dropped, outcome_column_dropped(), step.key)
     }
@@ -839,9 +998,46 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
             label_at(schema, step.key),
             kind_at(schema, step.key),
             step.nullable,
-            slot_live()
+            slot_live(),
+            ref_at(schema, step.key)
         )
         return step_of(altered, outcome_nullability_changed(), step.key)
+    }
+
+    if step.kind == step_alter_kind() {
+        if is_live(schema, step.key) == 0 {
+            return existing_key_refusal(schema, step.key)
+        }
+        if step.key == schema.primary {
+            return unchanged(schema, outcome_primary_key(), step.key)
+        }
+        # Both ends of a reference must keep one kind, so a column that
+        # references a key cannot change kind on its own.
+        if ref_at(schema, step.key) != 0 {
+            return unchanged(schema, outcome_in_reference(), step.key)
+        }
+        if widens(kind_at(schema, step.key), step.column_kind) == 0 {
+            if step.policy != policy_discard() {
+                return unchanged(schema, outcome_destructive(), step.key)
+            }
+            # A narrowing under Discard replaces every value with null, so
+            # a NOT NULL column has no value to keep: relax it first.
+            if nullable_at(schema, step.key) == 0 {
+                return unchanged(schema, outcome_needs_backfill(), step.key)
+            }
+        }
+        let rekinded: Schema = with_column(
+            schema,
+            schema.table,
+            schema.primary,
+            step.key,
+            label_at(schema, step.key),
+            step.column_kind,
+            nullable_at(schema, step.key),
+            slot_live(),
+            0
+        )
+        return step_of(rekinded, outcome_kind_changed(), step.key)
     }
 
     return unchanged(schema, outcome_key_unknown(), step.key)
@@ -856,6 +1052,18 @@ fn apply(schema: Schema, step: Migration) -> SchemaStep {
 
 fn table_users() -> Int {
     return 1
+}
+
+fn table_posts() -> Int {
+    return 2
+}
+
+# The seed holds exactly two tables, so "the other table" is a function.
+fn other_table(table: Int) -> Int {
+    if table == table_users() {
+        return table_posts()
+    }
+    return table_users()
 }
 
 fn label_id() -> Int {
@@ -878,16 +1086,28 @@ fn label_nickname() -> Int {
     return 5
 }
 
+fn label_author_id() -> Int {
+    return 6
+}
+
+fn label_views() -> Int {
+    return 7
+}
+
 # ---------------------------------------------------- the declared schema
 #
-# What the application runs against, written as a value. This is the file a
-# developer edits, the way they would edit schema.prisma or a Drizzle table.
+# What the application runs against, written as values. These are the
+# functions a developer edits, the way they would edit schema.prisma or a
+# Drizzle table.
 #
-# Key 4 is declared retired. A dropped key is part of the schema — protobuf
-# calls it `reserved` — because forgetting it is how a later column gets
-# handed an old identity. Leaving it out is drift, and the gate says so.
+# users key 4 is declared retired. A dropped key is part of the schema —
+# protobuf calls it `reserved` — because forgetting it is how a later column
+# gets handed an old identity. Leaving it out is drift, and the gate says so.
+#
+# posts key 2 references users key 1: a key, not the name `id`, so renaming
+# users.id would need no migration of posts.
 
-fn declared_schema() -> Schema {
+fn declared_users() -> Schema {
     let schema: Schema = Schema(
         table: table_users(),
         primary: 1,
@@ -895,20 +1115,59 @@ fn declared_schema() -> Schema {
         c1_kind: kind_bigint(),
         c1_nullable: 0,
         c1_state: slot_live(),
+        c1_ref: 0,
         c2_label: label_email(),
         c2_kind: kind_text(),
         c2_nullable: 0,
         c2_state: slot_live(),
+        c2_ref: 0,
         c3_label: label_display_name(),
         c3_kind: kind_text(),
         c3_nullable: 1,
         c3_state: slot_live(),
+        c3_ref: 0,
         c4_label: 0,
         c4_kind: 0,
         c4_nullable: 0,
-        c4_state: slot_retired()
+        c4_state: slot_retired(),
+        c4_ref: 0
     )
     return schema
+}
+
+fn declared_posts() -> Schema {
+    let schema: Schema = Schema(
+        table: table_posts(),
+        primary: 1,
+        c1_label: label_id(),
+        c1_kind: kind_bigint(),
+        c1_nullable: 0,
+        c1_state: slot_live(),
+        c1_ref: 0,
+        c2_label: label_author_id(),
+        c2_kind: kind_bigint(),
+        c2_nullable: 0,
+        c2_state: slot_live(),
+        c2_ref: 1,
+        c3_label: label_views(),
+        c3_kind: kind_bigint(),
+        c3_nullable: 1,
+        c3_state: slot_live(),
+        c3_ref: 0,
+        c4_label: 0,
+        c4_kind: 0,
+        c4_nullable: 0,
+        c4_state: slot_empty(),
+        c4_ref: 0
+    )
+    return schema
+}
+
+fn declared(table: Int) -> Schema {
+    if table == table_posts() {
+        return declared_posts()
+    }
+    return declared_users()
 }
 
 # ---------------------------------------------------- the migration history
@@ -919,7 +1178,7 @@ fn declared_schema() -> Schema {
 # a history with a refused step in it does not describe any database.
 
 fn history_length() -> Int {
-    return 7
+    return 11
 }
 
 fn history_step(number: Int) -> Migration {
@@ -967,46 +1226,88 @@ fn history_step(number: Int) -> Migration {
             policy_discard()
         )
     }
+    if number == 8 {
+        return migration(
+            step_create_table(), table_posts(), 1, label_id(), kind_bigint(), 0,
+            policy_none()
+        )
+    }
+    # A reference names the other table's key 1, not its column name. The
+    # table was created one step ago, so it may as well hold rows: a NOT
+    # NULL column still names its backfill.
+    if number == 9 {
+        return referencing(
+            step_add_column(), table_posts(), 2, label_author_id(), kind_bigint(), 0,
+            policy_backfilled(), 1
+        )
+    }
+    if number == 10 {
+        return migration(
+            step_add_column(), table_posts(), 3, label_views(), kind_integer(), 1,
+            policy_none()
+        )
+    }
+    # Widening keeps every value, so it needs no policy.
+    if number == 11 {
+        return migration(
+            step_alter_kind(), table_posts(), 3, 0, kind_bigint(), 0,
+            policy_none()
+        )
+    }
     return no_step()
 }
 
 # ------------------------------------------------------ replay and drift
 
-# The schema the first `last` steps of the history produce, from nothing. This
-# is the shadow database: a fold, run at build time, with no server.
-fn replay_from(schema: Schema, number: Int, last: Int) -> Schema {
-    if number > last {
-        return schema
+# Table `table` after the first `last` steps of the history, from nothing.
+# This is the shadow database: a fold, run at build time, with no server.
+#
+# A step changes only the table it names, and reads the other one to check a
+# reference. So the table after step n is the table after step n - 1, with
+# step n applied when it names this table — against the other table as it
+# stood after step n - 1.
+fn table_after(table: Int, last: Int) -> Schema {
+    if last < 1 {
+        return empty_schema()
     }
-    let next: Schema = step_schema(apply(schema, history_step(number)))
-    return replay_from(next, number + 1, last)
+    let before: Schema = table_after(table, last - 1)
+    let step: Migration = history_step(last)
+    if step.table != table {
+        return before
+    }
+    let other: Schema = table_after(other_table(table), last - 1)
+    return step_schema(apply(before, other, step))
 }
 
-fn replay(last: Int) -> Schema {
-    return replay_from(empty_schema(), 1, last)
+# Step `number` of the history, applied to the database as the steps before
+# it left it.
+fn history_transition(number: Int) -> SchemaStep {
+    let step: Migration = history_step(number)
+    let before: Schema = table_after(step.table, number - 1)
+    let other: Schema = table_after(other_table(step.table), number - 1)
+    return apply(before, other, step)
 }
 
 # The first step of the history that was refused, or 0 when every step
 # applied. A refused step leaves the schema unchanged, so without this the
 # fold would quietly skip it and drift would blame the declaration instead.
-fn refused_from(schema: Schema, number: Int, last: Int) -> Int {
+fn refused_from(number: Int, last: Int) -> Int {
     if number > last {
         return 0
     }
-    let step: SchemaStep = apply(schema, history_step(number))
-    if outcome_applied(step_outcome(step)) == 0 {
+    if outcome_applied(step_outcome(history_transition(number))) == 0 {
         return number
     }
-    return refused_from(step_schema(step), number + 1, last)
+    return refused_from(number + 1, last)
 }
 
 fn refused_step(last: Int) -> Int {
-    return refused_from(empty_schema(), 1, last)
+    return refused_from(1, last)
 }
 
 # One key's slot in two schemas, compared. Only the state is compared for a
-# slot that is not live: a retired key has no label, kind, or nullability to
-# disagree about.
+# slot that is not live: a retired key has no label, kind, nullability, or
+# reference to disagree about.
 fn slot_differs(left: Schema, right: Schema, key: Int) -> Int {
     if state_at(left, key) != state_at(right, key) {
         return 1
@@ -1023,54 +1324,54 @@ fn slot_differs(left: Schema, right: Schema, key: Int) -> Int {
     if nullable_at(left, key) != nullable_at(right, key) {
         return 1
     }
+    if ref_at(left, key) != ref_at(right, key) {
+        return 1
+    }
     return 0
 }
 
-fn drift(declared: Schema, replayed: Schema) -> Drift {
-    if declared.table != replayed.table {
+fn drift(declared_table: Schema, replayed: Schema) -> Drift {
+    if declared_table.table != replayed.table {
         return Diverged(0)
     }
-    if declared.primary != replayed.primary {
+    if declared_table.primary != replayed.primary {
         return Diverged(0)
     }
-    if slot_differs(declared, replayed, 1) == 1 {
+    if slot_differs(declared_table, replayed, 1) == 1 {
         return Diverged(1)
     }
-    if slot_differs(declared, replayed, 2) == 1 {
+    if slot_differs(declared_table, replayed, 2) == 1 {
         return Diverged(2)
     }
-    if slot_differs(declared, replayed, 3) == 1 {
+    if slot_differs(declared_table, replayed, 3) == 1 {
         return Diverged(3)
     }
-    if slot_differs(declared, replayed, 4) == 1 {
+    if slot_differs(declared_table, replayed, 4) == 1 {
         return Diverged(4)
     }
-    return InSync(live_count(declared))
+    return InSync(live_count(declared_table))
 }
 
 # ---------------------------------------------------------------- plan
 #
-# The next migration for one key: what `drizzle-kit generate` and
-# `prisma migrate dev --create-only` produce, decided by key rather than by
-# name. Two rules hold it honest.
+# The next migration for one key of one table: what `drizzle-kit generate`
+# and `prisma migrate dev --create-only` produce, decided by key rather than
+# by name. Two rules hold it honest.
 #
 #   A rename is planned when, and only when, one key's label changed. Two
 #   different keys are never paired, so a drop and an add are never read as a
 #   rename, and a rename is never emitted as a drop and an add.
 #
-#   The planner never chooses a policy. A planned drop or tightening carries
-#   `policy_none`, so applying it is refused until a person writes the policy
-#   into the history. Data loss is a decision, and a generator is not where
-#   decisions are made.
+#   The planner never chooses a policy. A planned drop, tightening, or
+#   narrowing carries `policy_none`, so applying it is refused until a person
+#   writes the policy into the history. Data loss is a decision, and a
+#   generator is not where decisions are made.
 #
-# The seed plans one step per key per pass; the canonical planner returns the
-# whole list. A key that needs a rename and a tightening gets the rename now
-# and the tightening on the next pass, which changes the order nothing applies
-# in and nothing about what is applied.
-#
-# A change of kind alone has no migration in this slice (issue #48), so the
-# planner returns no step for it and drift still names the key. Silence from
-# the planner is never read as agreement: the gate checks drift, not the plan.
+# The seed plans one step per key per pass, in the order rename, nullability,
+# kind; the canonical planner returns the whole list. Adding or removing a
+# reference on an existing column has no migration in this slice, so the
+# planner returns no step for it and drift still names the key: silence from
+# the planner is never read as agreement, because the gate checks drift.
 
 fn plan(current: Schema, desired: Schema, key: Int) -> Migration {
     let held: Int = state_at(current, key)
@@ -1099,14 +1400,21 @@ fn plan(current: Schema, desired: Schema, key: Int) -> Migration {
                     nullable_at(desired, key), policy_none()
                 )
             }
+            if kind_at(current, key) != kind_at(desired, key) {
+                return migration(
+                    step_alter_kind(), desired.table, key, 0,
+                    kind_at(desired, key), 0, policy_none()
+                )
+            }
             return no_step()
         }
         # Empty or retired now and live in the declaration: an add. For a
         # retired key, apply refuses it by name — the planner is not where
         # that rule lives, so it does not need a second copy of it.
-        return migration(
+        return referencing(
             step_add_column(), desired.table, key, label_at(desired, key),
-            kind_at(desired, key), nullable_at(desired, key), policy_none()
+            kind_at(desired, key), nullable_at(desired, key), policy_none(),
+            ref_at(desired, key)
         )
     }
 

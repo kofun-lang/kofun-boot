@@ -61,6 +61,7 @@ done
 
 for declaration in \
     'type ColumnKey = {' \
+    'type Reference = {' \
     'type ColumnKind =' \
     'type Column = {' \
     'type Table = {' \
@@ -86,6 +87,10 @@ done
 require_line 'a canonical column lost its key' '    key: ColumnKey,' "$contract"
 require_line 'a canonical table no longer records its retired keys' \
     '    retired: List[ColumnKey],' "$contract"
+require_line 'a canonical column no longer carries its reference' \
+    '    references: Option[Reference],' "$contract"
+require_line 'the canonical kind change lost its policy' \
+    '| AlterKind(table: Text, key: ColumnKey, kind: ColumnKind, policy: Policy)' "$contract"
 require_line 'a canonical rename no longer names the key it renames' \
     '| RenameColumn(table: Text, key: ColumnKey, name: Text)' "$contract"
 require_line 'the canonical backfill no longer carries its expression' \
@@ -172,95 +177,110 @@ test "$(sed -n '/^contract$/{n;p;q;}' "$WORK/out")" = \
 
 # History: every committed step applied. A refused step means the history
 # does not describe any database, and the fold would quietly replay around it.
+# Twelve lines per step: step kind table key label column_kind nullable policy
+# ref outcome payload live. Outcomes 1-5 and 16 apply a step.
 section history >"$WORK/history"
 count=$(sed -n 1p "$WORK/history")
 test "$count" -ge 1 || fail 'the history is empty'
-sed -n '2,$p' "$WORK/history" | paste - - - - - - - - - - - >"$WORK/history.rows"
+sed -n '2,$p' "$WORK/history" | paste - - - - - - - - - - - - >"$WORK/history.rows"
 test "$(wc -l <"$WORK/history.rows" | tr -d ' ')" -eq "$count" ||
-    fail "the history section does not hold $count eleven-line steps"
-while IFS='	' read -r step kind table key label column_kind nullable policy outcome payload live; do
-    if test "$outcome" -lt 1 || test "$outcome" -gt 5; then
-        fail "history step $step was refused: outcome $outcome carrying $payload (kind $kind at key $key)"
-    fi
+    fail "the history section does not hold $count twelve-line steps"
+while IFS='	' read -r step kind table key label column_kind nullable policy ref outcome payload live; do
+    case $outcome in
+        1|2|3|4|5|16) ;;
+        *) fail "history step $step was refused: outcome $outcome carrying $payload (kind $kind on table $table key $key)" ;;
+    esac
 done <"$WORK/history.rows"
 
 history_row() {
     sed -n "$1p" "$WORK/history.rows" | tr '\t' ' '
 }
-test "$(history_row 5)" = '5 3 1 3 4 0 0 0 3 3 4' ||
-    fail "the committed rename is not applied as a rename of key 3: $(history_row 5)"
-test "$(history_row 7)" = '7 4 1 4 0 0 0 1 4 4 3' ||
-    fail "the committed drop does not retire key 4 under its discard policy: $(history_row 7)"
+test "$(history_row 5)" = '5 3 1 3 4 0 0 0 0 3 3 4' ||
+    fail "the committed rename is not applied as a rename of users key 3: $(history_row 5)"
+test "$(history_row 7)" = '7 4 1 4 0 0 0 1 0 4 4 3' ||
+    fail "the committed drop does not retire users key 4 under its discard policy: $(history_row 7)"
+test "$(history_row 9)" = '9 2 2 2 6 1 0 2 1 2 2 2' ||
+    fail "the committed reference is not applied as posts key 2 naming users key 1: $(history_row 9)"
+test "$(history_row 11)" = '11 6 2 3 0 1 0 0 0 16 3 3' ||
+    fail "the committed widening is not applied without a policy: $(history_row 11)"
 
-# Drift. When the declaration and the history disagree, say where, and say
-# what the planner would write to close it — that is the whole message a
-# developer needs, and it is all in the output already.
+# Drift, per table. When the declaration and the history disagree, say where,
+# and say what the planner would write to close it — that is the whole
+# message a developer needs, and it is all in the output already.
 section drift >"$WORK/drift"
-drift_kind=$(sed -n 1p "$WORK/drift")
-drift_payload=$(sed -n 2p "$WORK/drift")
-refused=$(sed -n 3p "$WORK/drift")
-traced=$(sed -n 4p "$WORK/drift")
+refused=$(sed -n 7p "$WORK/drift")
 test "$refused" = 0 ||
     fail "history step $refused was refused, so the history replays to no database"
-test "$traced" = 1 ||
-    fail 'the printed history and the replay the drift check used are different folds'
-if test "$drift_kind" != 1; then
-    section plan | paste - - - - - - - >"$WORK/plan.rows"
-    planned=$(awk -F'\t' -v key="$drift_payload" '$3 == key { print $1; exit }' "$WORK/plan.rows")
-    case ${planned:-0} in
-        1) what='create the table' ;;
-        2) what='an add' ;;
-        3) what='a rename' ;;
-        4) what='a drop, which needs a discard policy written into the history' ;;
-        5) what='a nullability change' ;;
-        *) what='nothing the planner can write; edit the declaration back or write the step by hand' ;;
-    esac
-    fail "the declared schema drifted from the migration history at key $drift_payload; the next migration for it is $what"
-fi
-test "$drift_payload" = 3 ||
-    fail "the declared schema is in sync with $drift_payload live columns, expected 3"
+section plan | paste - - - - - - - - >"$WORK/plan.rows"
+for row in 1 4; do
+    table=$(sed -n "${row}p" "$WORK/drift")
+    drift_kind=$(sed -n "$((row + 1))p" "$WORK/drift")
+    drift_payload=$(sed -n "$((row + 2))p" "$WORK/drift")
+    if test "$drift_kind" != 1; then
+        planned=$(awk -F'\t' -v t="$table" -v key="$drift_payload" '$2 == t && $3 == key { print $1; exit }' "$WORK/plan.rows")
+        case ${planned:-0} in
+            1) what='create the table' ;;
+            2) what='an add' ;;
+            3) what='a rename' ;;
+            4) what='a drop, which needs a discard policy written into the history' ;;
+            5) what='a nullability change' ;;
+            6) what='a kind change' ;;
+            *) what='nothing the planner can write; edit the declaration back or write the step by hand' ;;
+        esac
+        fail "the declared schema drifted from the migration history at table $table key $drift_payload; the next migration for it is $what"
+    fi
+    test "$drift_payload" = 3 ||
+        fail "table $table is in sync with $drift_payload live columns, expected 3"
+done
 
 section schema >"$WORK/schema.section"
-test "$(sed -n '1,4p' "$WORK/schema.section" | tr '\n' ' ')" = '1 1 3 1 ' ||
-    fail "the declared schema is not users(primary 1) with three live columns and one retired key: $(sed -n '1,4p' "$WORK/schema.section" | tr '\n' ' ')"
-test "$(sed -n '20,24p' "$WORK/schema.section" | tr '\n' ' ')" = '4 0 0 0 2 ' ||
-    fail 'key 4 is not declared retired; a dropped key that is not declared can be reissued'
+test "$(wc -l <"$WORK/schema.section" | tr -d ' ')" -eq 56 ||
+    fail 'the schema section is not two tables of 28 lines'
+schema_lines() {
+    sed -n "$1,$2p" "$WORK/schema.section" | tr '\n' ' '
+}
+test "$(schema_lines 1 4)" = '1 1 3 1 ' ||
+    fail "users is not declared with primary key 1, three live columns, and one retired key: $(schema_lines 1 4)"
+test "$(schema_lines 23 28)" = '4 0 0 0 2 0 ' ||
+    fail 'users key 4 is not declared retired; a dropped key that is not declared can be reissued'
+test "$(schema_lines 29 32)" = '2 1 3 0 ' ||
+    fail "posts is not declared with primary key 1 and three live columns: $(schema_lines 29 32)"
+test "$(schema_lines 39 44)" = '2 6 1 0 1 1 ' ||
+    fail "posts key 2 does not reference users key 1: $(schema_lines 39 44)"
 
 # The plan is empty: a planned step is a migration somebody has not written.
-section plan >"$WORK/plan"
-test "$(wc -l <"$WORK/plan" | tr -d ' ')" -eq 28 ||
-    fail 'the plan section is not seven lines for each of four keys'
-paste - - - - - - - <"$WORK/plan" >"$WORK/plan.rows"
-nonempty=$(awk -F'\t' '$1 != 0 { print "key " $3 " kind " $1 }' "$WORK/plan.rows")
+test "$(wc -l <"$WORK/plan.rows" | tr -d ' ')" -eq 8 ||
+    fail 'the plan section is not eight lines for each key of each table'
+nonempty=$(awk -F'\t' '$1 != 0 { print "table " $2 " key " $3 " kind " $1 }' "$WORK/plan.rows")
 test -z "$nonempty" || fail "the plan is not empty: $nonempty"
 
 # The planner regenerates the history. Asked to get from the schema before
 # each committed step to the schema after it, it proposes the same step at the
-# same key — so a rename comes back as a rename, never as a drop and an add —
-# and it proposes no policy, because every policy in the history was written
-# by a person.
+# same key — so a rename comes back as a rename, never as a drop and an add,
+# and a reference comes back naming the same key — and it proposes no
+# policy, because every policy in the history was written by a person.
 section regenerate >"$WORK/regenerate"
 test "$(sed -n 1p "$WORK/regenerate")" = "$count" ||
     fail 'the planner was not asked to regenerate every committed step'
-sed -n '2,$p' "$WORK/regenerate" | paste - - - - - - - - >"$WORK/regenerate.rows"
-while IFS='	' read -r step kind table key label column_kind nullable policy; do
+sed -n '2,$p' "$WORK/regenerate" | paste - - - - - - - - - >"$WORK/regenerate.rows"
+while IFS='	' read -r step kind table key label column_kind nullable policy ref; do
     test "$policy" = 0 ||
         fail "the planner supplied policy $policy for history step $step; a policy is a person's decision"
-    committed=$(awk -F'\t' -v s="$step" '$1 == s { print $2, $3, $4, $5, $6, $7; exit }' "$WORK/history.rows")
-    test "$kind $table $key $label $column_kind $nullable" = "$committed" ||
-        fail "the planner did not regenerate history step $step: planned '$kind $table $key $label $column_kind $nullable', committed '$committed'"
+    committed=$(awk -F'\t' -v s="$step" '$1 == s { print $2, $3, $4, $5, $6, $7, $9; exit }' "$WORK/history.rows")
+    test "$kind $table $key $label $column_kind $nullable $ref" = "$committed" ||
+        fail "the planner did not regenerate history step $step: planned '$kind $table $key $label $column_kind $nullable $ref', committed '$committed'"
 done <"$WORK/regenerate.rows"
 
 # Probes: each rule the history never needed, run once against the replayed
-# schema. Refused, with the observed value, and the schema did not move.
+# database. Refused, with the observed value, and the table did not move.
 section probes >"$WORK/probes"
-test "$(sed -n 1p "$WORK/probes")" = 6 || fail 'expected six probes'
-sed -n '2,$p' "$WORK/probes" | paste - - - - - - - - - - >"$WORK/probe.rows"
+test "$(sed -n 1p "$WORK/probes")" = 10 || fail 'expected ten probes'
+sed -n '2,$p' "$WORK/probes" | paste - - - - - - - - - - - >"$WORK/probe.rows"
 probe() {
     number=$1
     label=$2
     want=$3
-    got=$(sed -n "${number}p" "$WORK/probe.rows" | awk -F'\t' '{ print $8, $9, $10 }')
+    got=$(sed -n "${number}p" "$WORK/probe.rows" | awk -F'\t' '{ print $9, $10, $11 }')
     test "$got" = "$want" || fail "$label: expected '$want', got '$got'"
 }
 probe 1 'a second CreateTable names the table that exists' '6 1 0'
@@ -269,9 +289,13 @@ probe 3 'a dropped key stays spent' '9 4 0'
 probe 4 'a key past the bound names the bound' '15 4 0'
 probe 5 'a drop with no policy is destructive' '13 3 0'
 probe 6 'tightening a nullable column needs a backfill' '14 3 0'
+probe 7 'a reference to a column that is not the primary key dangles' '17 4 0'
+probe 8 'a column in a reference keeps its kind' '18 2 0'
+probe 9 'narrowing without a policy is destructive' '13 3 0'
+probe 10 'narrowing a NOT NULL column under discard needs it relaxed first' '14 2 0'
 
 lines=$(wc -l <"$WORK/out" | tr -d ' ')
-test "$lines" -eq 267 || fail "the decisions above cover the whole report: expected 267 lines, got $lines"
+test "$lines" -eq 486 || fail "the decisions above cover the whole report: expected 486 lines, got $lines"
 cmp -s "$expected" "$WORK/out" ||
     fail "named decisions passed but the recorded schema golden still differs:
 $(diff "$expected" "$WORK/out" | head -20)"
@@ -331,12 +355,12 @@ if test "${SCHEMA_SKIP_BREAK_TEST:-0}" != 1; then
     # says the next migration is a rename — not a drop and an add.
     schema_break declared-rename \
         's/^        c3_label: label_display_name(),$/        c3_label: label_name(),/' \
-        'drifted from the migration history at key 3; the next migration for it is a rename'
+        'drifted from the migration history at table 1 key 3; the next migration for it is a rename'
 
     # A dropped key that the declaration forgot to keep retired.
     schema_break forgotten-retirement \
-        's/^        c4_state: slot_retired()$/        c4_state: slot_empty()/' \
-        'drifted from the migration history at key 4'
+        's/^        c4_state: slot_retired(),$/        c4_state: slot_empty(),/' \
+        'drifted from the migration history at table 1 key 4'
 
     # A committed drop with its policy removed: the history no longer applies.
     schema_break history-policy \
@@ -350,7 +374,20 @@ if test "${SCHEMA_SKIP_BREAK_TEST:-0}" != 1; then
         's/^                    step_rename_column(), desired.table, key,$/                    step_drop_column(), desired.table, key,/' \
         'the planner did not regenerate history step 5'
 
-    printf 'schema: a declared rename, a forgotten retirement, a missing policy, and a destructive planner fail by name: PASS\n'
+    # A reference dropped from the declaration while the history still adds
+    # it. The planner cannot add a reference to an existing column, and the
+    # gate says so instead of reading its silence as agreement.
+    schema_break forgotten-reference \
+        's/^        c2_ref: 1,$/        c2_ref: 0,/' \
+        'drifted from the migration history at table 2 key 2; the next migration for it is nothing the planner can write'
+
+    # A kind lattice that calls a narrowing a widening: the narrowing probe
+    # then applies without any policy, and data would be lost unannounced.
+    schema_break narrowing-as-widening \
+        's/^    if from == kind_bigint() {$/    if from == kind_bigint() {\n        if to == kind_integer() {\n            return 1\n        }/' \
+        'narrowing without a policy is destructive'
+
+    printf 'schema: a declared rename, a forgotten retirement or reference, a missing policy, a destructive planner, and a lattice that narrows silently fail by name: PASS\n'
 
     # A hand-edited projection.
     cp -R "$contracts" "$breaks/contracts"

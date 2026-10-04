@@ -162,6 +162,8 @@ dispatch の順序（size → route → method）は、既に gate が読んで�
 |---|---|---|---|
 | rename の判定 | 名前の差分から drop+add を出し、data loss を警告する | rename か create かを対話で尋ねる | **column は key で同定する**。rename は label 変更なので推測しない |
 | 削除した列の識別子 | 管理しない | 管理しない | key は **retired** になり、二度と発行しない（protobuf の `reserved`） |
+| 外部 key | 列の名前で参照する | 列の名前で参照する | **相手の table の key** を名指す。参照先の列を rename しても、参照側の migration は要らない |
+| 型の変更 | 生成した SQL を人が直す | 生成した SQL を人が直す | 値を失わない拡大は policy 不要。縮小は `Discard` が必要で、参照に関わる列は変えられない |
 | drift 検出 | shadow database に history を流す | snapshot JSON と比べる | history は **fold** である。build 時の関数呼び出しで、DB は要らない |
 | 危険な step | 対話で確認する | 対話で確認する | **policy を書かないと apply が拒否する**。planner は policy を決して補わない |
 

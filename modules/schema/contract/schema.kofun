@@ -3,8 +3,8 @@
 # This surface is deliberately richer than the executable Stage 2 seed in
 # ../core/schema.kofun: a schema holds a List of tables, a name is Text, a
 # kind is a closed sum, and a migration is one constructor per step with only
-# the fields that step reads.  The seed projects the same decisions into four
-# fixed key slots of one table and integer codes, without changing a single
+# the fields that step reads.  The seed projects the same decisions into two
+# tables of four fixed key slots and integer codes, without changing a single
 # outcome.  tests/schema/check.sh pins that correspondence constructor by
 # constructor.
 #
@@ -38,12 +38,22 @@ type ColumnKind =
     | BigInt
     | Text
     | Boolean
+    | Integer
+
+# A reference names the other table's key, never a column name, so renaming
+# the referenced column needs no migration of the referencing one.  It must
+# name that table's live primary key, of the same kind.
+type Reference = {
+    table: Text,
+    key: ColumnKey,
+}
 
 type Column = {
     key: ColumnKey,
     name: Text,
     kind: ColumnKind,
     nullable: Bool,
+    references: Option[Reference],
 }
 
 type Table = {
@@ -73,6 +83,7 @@ type Migration =
     | RenameColumn(table: Text, key: ColumnKey, name: Text)
     | DropColumn(table: Text, key: ColumnKey, policy: Policy)
     | SetNullable(table: Text, key: ColumnKey, nullable: Bool, policy: Policy)
+    | AlterKind(table: Text, key: ColumnKey, kind: ColumnKind, policy: Policy)
 
 type SchemaOutcome =
     | TableCreated(table: Int)
@@ -90,6 +101,9 @@ type SchemaOutcome =
     | Destructive(key: Int)
     | NeedsBackfill(key: Int)
     | Full(capacity: Int)
+    | KindChanged(key: Int)
+    | DanglingReference(key: Int)
+    | InReference(key: Int)
 
 type Drift =
     | InSync(live: Int)
@@ -108,7 +122,12 @@ type ReplayError = {
 }
 
 # One step, applied.  The order of the checks is part of the contract:
-# table, key range, key state, primary key, name, policy.
+# table, key range, key state, primary key, reference, name, policy.
+#
+# A kind change that widens (Integer to BigInt, any kind to Text from Integer,
+# BigInt, or Boolean) keeps every value and needs no policy; any other kind
+# change needs Discard, and cannot apply to a NOT NULL column, whose values
+# Discard would replace with null.  A column in a reference keeps its kind.
 fn schema_apply(
     schema: Schema,
     migration: Migration

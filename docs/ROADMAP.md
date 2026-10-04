@@ -19,7 +19,7 @@ have to break.
 | [L4 #4](https://github.com/kofun-lang/kofun-boot/issues/4) | replay | trace format v1 (versioned, digest-pinned like tzdb fixtures); record mode; replay mode; hostile-environment gate | — |
 | [L5 #5](https://github.com/kofun-lang/kofun-boot/issues/5) | speed | benchmark gate on `benchmarks/http` harness; recorded baselines; regression = failure; published same-box comparisons vs Elysia/Gin/Hono | — |
 | [L6 #6](https://github.com/kofun-lang/kofun-boot/issues/6) | concurrency | scoped spawn/join surface; cancellation as typed result; deterministic schedule replay | kofun #898 RFC, #736 |
-| [L7 #7](https://github.com/kofun-lang/kofun-boot/issues/7) | data | schema-as-contract (drizzle direction) — **executable for one table: key identity, migrations as a fold, drift without a database ([#45](https://github.com/kofun-lang/kofun-boot/issues/45))**; **N+1 as a measurement ([#46](https://github.com/kofun-lang/kofun-boot/issues/46))**; API derived from schema (Hasura's move); typed queries; PostgREST interop | typed queries and row codecs only: List/Text lowering maturity (kofun #919 lane) |
+| [L7 #7](https://github.com/kofun-lang/kofun-boot/issues/7) | data | schema-as-contract (drizzle direction) — **executable for two tables: key identity, migrations as a fold, drift without a database ([#45](https://github.com/kofun-lang/kofun-boot/issues/45)), references by key ([#47](https://github.com/kofun-lang/kofun-boot/issues/47)), kind changes ([#48](https://github.com/kofun-lang/kofun-boot/issues/48))**; **N+1 as a measurement ([#46](https://github.com/kofun-lang/kofun-boot/issues/46))**; API derived from schema (Hasura's move); typed queries; PostgREST interop | typed queries and row codecs only: List/Text lowering maturity (kofun #919 lane) |
 | [L8 #8](https://github.com/kofun-lang/kofun-boot/issues/8) | cli & dx | `boot new/dev/test/bench/openapi/gen`; **`boot mock` — json-server's convenience, replayable**; scaffolds that compile with the core/shell split; watch-reload | — |
 | [L9 #9](https://github.com/kofun-lang/kofun-boot/issues/9) | desktop | webview shell (KB-scale, gated size); wasm32 guest via host ABI v1; typed IPC = the router contract; **UI quality as a discipline, not a default (taste-skill)** | kofun #906 activation lanes |
 | [L10 #11](https://github.com/kofun-lang/kofun-boot/issues/11) | site & docs | tutorial that never lies (every snippet is a gated fixture); comparison pages that show their measurement | — |
@@ -56,7 +56,7 @@ stories.
 | desktop binary size vs Tauri hello | L9 gate | *(unmeasured; kofun native ELF fixtures are KB-scale, which is the reason to believe the bar is reachable)* |
 | replay determinism | L4 gate | seed already holds it: two runs, both backends, `env -i` — byte-identical |
 | statements per request as N grows | L7 loader gate | seed: the shipped strategy costs 2 at N = 1, 2, 3, 4; the sequential control costs N + 1 and is refused |
-| schema drift detected without a database | L7 schema gate | seed: a 7-step history replays to the declaration on both backends; both SQL projections build the same PostgreSQL 16 database |
+| schema drift detected without a database | L7 schema gate | seed: an 11-step history over two tables replays to the declaration on both backends; both SQL projections build the same PostgreSQL 16 database, foreign key included |
 
 ## Filed and ready now
 

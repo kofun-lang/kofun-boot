@@ -294,11 +294,21 @@ by key and never supplies a policy. The gate asks it to regenerate every
 committed step from the schemas on either side of it, and a planner that
 reads a rename as a drop fails by naming the step.
 
+**A reference names a key, too.** `posts.author_id` references users key 1,
+not the name `id`, so renaming the referenced column needs no migration of
+the referencing one. A reference must name the other table's live primary key
+of the same kind, or it is refused as `DanglingReference`.
+
+**A kind change widens or names its loss.** `integer` to `bigint` keeps every
+value and needs no policy. A narrowing needs `Discard`, and a column in a
+reference keeps its kind.
+
 SQL is a projection. `scripts/ddl.sh` writes `contracts/schema.sql` and
 `contracts/migrations.sql` from what the binary printed, and the gate fails
 on a hand edit. `tests/schema/postgres.sh` builds two PostgreSQL databases,
-one from each file, and requires byte-identical schema dumps. It then
-removes one `NOT NULL` and requires them to differ.
+one from each file, and requires byte-identical schema dumps, foreign key
+included. It then removes one `NOT NULL`, and separately the reference, and
+requires each to differ.
 
 ### The loader — N+1 is a measurement
 
@@ -386,7 +396,7 @@ number quoted; hand-editing the OpenAPI document fails with the diff.
 | Structured concurrency | Go's ergonomics, without the leaks | scoped spawn/join, deterministic schedules — blocked on the language RFC, and says so |
 | Desktop lighter than Tauri | Tauri, inverted | binary size and cold start as gated numbers — *unmeasured* |
 | A CLI worth living in | Rails, Spring Initializr | `boot new / dev / test / bench / openapi / gen` — **`new`, `dev`, `test`, `openapi` and the client generator hold today** |
-| Schema as a contract | Prisma, Drizzle, protobuf | DDL and migration SQL are projections of one declaration; a history that does not replay to it fails the build; renames are declared by key, never guessed — **holds for one table today**, with typed queries blocked on the language's List/Text lowering |
+| Schema as a contract | Prisma, Drizzle, protobuf | DDL and migration SQL are projections of one declaration; a history that does not replay to it fails the build; renames are declared by key, never guessed; references name a key — **holds for two tables with a foreign key and a kind change today**, with typed queries blocked on the language's List/Text lowering |
 | No N+1 by construction | Haxl, DataLoader, Drizzle | no field loads behind a read; each round coalesces to one statement per source; the shipped strategy's statement count does not move with N — **holds for the loader seed today** |
 
 ## Repository layout

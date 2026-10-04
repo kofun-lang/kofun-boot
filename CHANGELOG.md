@@ -72,6 +72,30 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
   - a sequential application;
   - an uncoalesced interpreter;
   - a lost dedupe.
+- **Two tables, references that name a key, and kind changes**
+  ([#47](https://github.com/kofun-lang/kofun-boot/issues/47),
+  [#48](https://github.com/kofun-lang/kofun-boot/issues/48)).
+  - The schema seed holds `users` and `posts`. A record in this slice cannot
+    hold a record, so the database is computed per table by
+    `table_after(table, n)`: a step changes only its own table and reads the
+    other to check a reference.
+  - A reference names the other table's key. It must be that table's live
+    primary key, of the same kind, or the add is refused as
+    `DanglingReference`.
+  - `AlterKind`:
+    - widening (`integer` to `bigint`, numeric or boolean to `text`) needs no
+      policy;
+    - narrowing needs `Discard`, and on a NOT NULL column is refused as
+      `NeedsBackfill`;
+    - a column in a reference is refused as `InReference`.
+  - The history has 11 steps, the probes cover the new refusals, and the gate
+    names a forgotten reference and a lattice that narrows silently.
+  - The PostgreSQL check compares the foreign key and the widened column, and
+    adds a negative control without the reference.
+  - `scripts/test-modules.sh` now builds one suite per test file, with the
+    module's non-suite `tests/*.kofun` files shared into each. A single
+    kotest harness is bounded by the language's lexical-use limit per
+    function.
 - **Released migration history is append-only**
   ([#52](https://github.com/kofun-lang/kofun-boot/issues/52)).
   - `scripts/migrations-lock.sh release VERSION` pins each released step's
@@ -80,7 +104,7 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
     disappeared, naming the step and the version that released it.
   - Rewording a projection comment is not a change.
   - The gate proves all three directions in a scratch copy on every run.
-  - No version has shipped the schema yet, so all seven steps are listed as
+  - No version has shipped the schema yet, so every step is listed as
     unreleased.
 - **Declared shapes compile to a fixed number of statements, measured by
   PostgreSQL** ([#49](https://github.com/kofun-lang/kofun-boot/issues/49)).

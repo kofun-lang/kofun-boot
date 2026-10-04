@@ -1,0 +1,183 @@
+# Unit tests for references between the two tables and for kind changes.
+#
+# A reference names the other table's key, never a column name, and a kind
+# change either keeps every value or names the policy that accepts losing
+# them. These are the rules a second table and a kind lattice add to the ones
+# in schema_test.kofun.
+
+fn users_final() -> Schema {
+    return table_after(table_users(), history_length())
+}
+
+fn posts_created() -> Schema {
+    return table_after(table_posts(), 8)
+}
+
+fn add_ref(key: Int, kind: Int, ref: Int) -> Migration {
+    return referencing(
+        step_add_column(), table_posts(), key, label_author_id(), kind, 1,
+        policy_none(), ref
+    )
+}
+
+fn test_a_table_does_not_exist_before_the_step_that_creates_it() -> Int {
+    let before: Schema = table_after(table_posts(), 7)
+    let step: SchemaStep = apply(before, users_final(), add_ref(2, kind_bigint(), 1))
+    let mut failures = 0
+    failures = failures + expect_eq_int(before.table, 0)
+    failures = failures + expect_eq_int(kind_of(step), outcome_no_table())
+    failures = failures + expect_eq_int(payload_of(step), table_posts())
+    return failures
+}
+
+# A reference names the other table's live primary key, of the same kind.
+fn test_a_reference_to_the_other_primary_key_applies() -> Int {
+    let step: SchemaStep = apply(posts_created(), users_final(), add_ref(2, kind_bigint(), 1))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_column_added())
+    failures = failures + expect_eq_int(ref_at(step_schema(step), 2), 1)
+    return failures
+}
+
+fn test_a_reference_to_a_column_that_is_not_the_primary_key_dangles() -> Int {
+    let step: SchemaStep = apply(posts_created(), users_final(), add_ref(2, kind_text(), 3))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_dangling_reference())
+    failures = failures + expect_eq_int(payload_of(step), 2)
+    failures = failures + expect_eq_int(live_count(step_schema(step)), 1)
+    return failures
+}
+
+fn test_a_reference_of_another_kind_dangles() -> Int {
+    let step: SchemaStep = apply(posts_created(), users_final(), add_ref(2, kind_text(), 1))
+    return expect_eq_int(kind_of(step), outcome_dangling_reference())
+}
+
+fn test_a_reference_into_a_table_that_does_not_exist_dangles() -> Int {
+    let step: SchemaStep = apply(posts_created(), empty_schema(), add_ref(2, kind_bigint(), 1))
+    return expect_eq_int(kind_of(step), outcome_dangling_reference())
+}
+
+# The reason a reference names a key: renaming the referenced column changes
+# nothing about the referencing one, and the database still replays to the
+# declaration.
+fn test_renaming_a_referenced_column_leaves_the_reference_alone() -> Int {
+    let renamed: Schema = step_schema(apply(users_final(), table_after(table_posts(), history_length()),
+        migration(step_rename_column(), table_users(), 1, label_name(), 0, 0, policy_none())))
+    let posts: Schema = table_after(table_posts(), history_length())
+    let mut failures = 0
+    failures = failures + expect_eq_int(label_at(renamed, 1), label_name())
+    failures = failures + expect_eq_int(renamed.primary, 1)
+    failures = failures + expect_eq_int(ref_at(posts, 2), 1)
+    failures = failures + expect_eq_int(reference_holds(renamed, ref_at(posts, 2), kind_at(posts, 2)), 1)
+    return failures
+}
+
+# ---------------------------------------------------------- kind changes
+
+fn alter(table: Int, key: Int, kind: Int, policy: Int) -> Migration {
+    return migration(step_alter_kind(), table, key, 0, kind, 0, policy)
+}
+
+fn posts_final() -> Schema {
+    return table_after(table_posts(), history_length())
+}
+
+fn test_widening_applies_without_a_policy() -> Int {
+    let before: Schema = table_after(table_posts(), 10)
+    let step: SchemaStep = apply(before, users_final(), alter(table_posts(), 3, kind_bigint(), policy_none()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_at(before, 3), kind_integer())
+    failures = failures + expect_eq_int(kind_of(step), outcome_kind_changed())
+    failures = failures + expect_eq_int(kind_at(step_schema(step), 3), kind_bigint())
+    failures = failures + expect_eq_int(nullable_at(step_schema(step), 3), 1)
+    return failures
+}
+
+fn test_the_kind_lattice_widens_only_where_every_value_survives() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_int(widens(kind_integer(), kind_bigint()), 1)
+    failures = failures + expect_eq_int(widens(kind_integer(), kind_text()), 1)
+    failures = failures + expect_eq_int(widens(kind_bigint(), kind_text()), 1)
+    failures = failures + expect_eq_int(widens(kind_boolean(), kind_text()), 1)
+    failures = failures + expect_eq_int(widens(kind_text(), kind_text()), 1)
+    failures = failures + expect_eq_int(widens(kind_bigint(), kind_integer()), 0)
+    failures = failures + expect_eq_int(widens(kind_text(), kind_bigint()), 0)
+    failures = failures + expect_eq_int(widens(kind_boolean(), kind_bigint()), 0)
+    return failures
+}
+
+fn test_narrowing_needs_discard() -> Int {
+    let refused: SchemaStep = apply(posts_final(), users_final(), alter(table_posts(), 3, kind_integer(), policy_none()))
+    let accepted: SchemaStep = apply(posts_final(), users_final(), alter(table_posts(), 3, kind_integer(), policy_discard()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(refused), outcome_destructive())
+    failures = failures + expect_eq_int(kind_at(step_schema(refused), 3), kind_bigint())
+    failures = failures + expect_eq_int(kind_of(accepted), outcome_kind_changed())
+    failures = failures + expect_eq_int(kind_at(step_schema(accepted), 3), kind_integer())
+    return failures
+}
+
+# Discard replaces values with null, which a NOT NULL column cannot hold.
+fn test_narrowing_a_not_null_column_needs_it_relaxed_first() -> Int {
+    let step: SchemaStep = apply(users_final(), posts_final(), alter(table_users(), 2, kind_boolean(), policy_discard()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(step), outcome_needs_backfill())
+    failures = failures + expect_eq_int(payload_of(step), 2)
+    return failures
+}
+
+fn test_a_column_in_a_reference_keeps_its_kind() -> Int {
+    let referencing_side: SchemaStep = apply(posts_final(), users_final(), alter(table_posts(), 2, kind_text(), policy_discard()))
+    let referenced_side: SchemaStep = apply(users_final(), posts_final(), alter(table_users(), 1, kind_text(), policy_discard()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(kind_of(referencing_side), outcome_in_reference())
+    failures = failures + expect_eq_int(payload_of(referencing_side), 2)
+    # The referenced side is a primary key, refused for that reason first.
+    failures = failures + expect_eq_int(kind_of(referenced_side), outcome_primary_key())
+    return failures
+}
+
+fn test_a_kind_only_difference_is_planned_as_an_alter_kind() -> Int {
+    let step: Migration = plan(table_after(table_posts(), 10), posts_final(), 3)
+    let mut failures = 0
+    failures = failures + expect_eq_int(step.kind, step_alter_kind())
+    failures = failures + expect_eq_int(step.column_kind, kind_bigint())
+    failures = failures + expect_eq_int(step.policy, policy_none())
+    return failures
+}
+
+# The planner never chooses data loss, for kinds either: a planned narrowing
+# carries no policy and is refused as planned.
+fn test_a_planned_narrowing_carries_no_policy_and_is_refused() -> Int {
+    let narrowed: Schema = with_column(
+        posts_final(), table_posts(), 1, 3, label_views(), kind_integer(), 1,
+        slot_live(), 0
+    )
+    let step: Migration = plan(posts_final(), narrowed, 3)
+    let mut failures = 0
+    failures = failures + expect_eq_int(step.kind, step_alter_kind())
+    failures = failures + expect_eq_int(step.policy, policy_none())
+    failures = failures + expect_eq_int(kind_of(apply(posts_final(), users_final(), step)), outcome_destructive())
+    return failures
+}
+
+fn test_a_planned_reference_carries_its_key() -> Int {
+    let step: Migration = plan(posts_created(), posts_final(), 2)
+    let mut failures = 0
+    failures = failures + expect_eq_int(step.kind, step_add_column())
+    failures = failures + expect_eq_int(step.ref, 1)
+    return failures
+}
+
+fn test_a_forgotten_reference_is_drift() -> Int {
+    let edited: Schema = with_column(
+        declared_posts(), table_posts(), 1, 2, label_author_id(), kind_bigint(), 0,
+        slot_live(), 0
+    )
+    let found: Drift = drift(edited, posts_final())
+    let mut failures = 0
+    failures = failures + expect_eq_int(drift_kind(found), drift_diverged())
+    failures = failures + expect_eq_int(drift_payload(found), 2)
+    return failures
+}

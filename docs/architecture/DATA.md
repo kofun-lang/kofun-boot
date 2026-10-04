@@ -89,6 +89,9 @@ the step that asks for it:
 | add a NOT NULL column to an existing table | `NeedsBackfill(key)` | `Backfill(expression)` |
 | tighten a nullable column | `NeedsBackfill(key)` | `Backfill(expression)` |
 | drop or relax the primary key | `PrimaryKey(key)` | not allowed |
+| narrow a column's kind | `Destructive(key)` | `Discard`, on a nullable column (`NeedsBackfill(key)` otherwise) |
+| change the kind of a column in a reference | `InReference(key)` | not allowed |
+| add a reference to anything but the other table's live primary key of the same kind | `DanglingReference(key)` | not allowed |
 
 The planner never supplies a policy. That makes `prisma migrate dev`'s data
 loss prompt and drizzle-kit's interactive question unnecessary: the planned
@@ -98,7 +101,7 @@ committed history, where a reviewer reads it.
 The order of the checks is part of the contract, the way the router's "size
 before route before method" is:
 
-> table → key range → key state → primary key → name → policy
+> table → key range → key state → primary key → reference → name → policy
 
 ## SQL is a projection
 
@@ -197,14 +200,14 @@ below.
 
 | claim | executable | where |
 |---|---|---|
-| key identity, retired keys, declared renames | yes, one table of four keys | `modules/schema` |
+| key identity, retired keys, declared renames | yes, two tables of four keys | `modules/schema` |
 | history as a fold, drift without a database | yes | `modules/schema`, `tests/schema/check.sh` |
 | planner by key, no policy supplied | yes, one step per key per pass | same |
 | DDL and migration SQL as gated projections | yes, PostgreSQL | `scripts/ddl.sh`, `contracts/*.sql` |
 | both SQL projections build the same database | yes, PostgreSQL 16 | `tests/schema/postgres.sh` |
 | round coalescing, N-independent statements | yes, one request in three strategies | `modules/loader`, `tests/loader/check.sh` |
-| multiple tables, foreign keys | no | [#47](https://github.com/kofun-lang/kofun-boot/issues/47) |
-| kind changes | no | [#48](https://github.com/kofun-lang/kofun-boot/issues/48) |
+| multiple tables, foreign keys that name a key | yes, two tables; a reference must name the other table's live primary key of the same kind | `modules/schema`, `tests/schema/postgres.sh` ([#47](https://github.com/kofun-lang/kofun-boot/issues/47)) |
+| kind changes: widening free, narrowing needs `Discard` | yes, a four-kind lattice | `modules/schema` ([#48](https://github.com/kofun-lang/kofun-boot/issues/48)) |
 | typed query values, row codecs, result types from selections | no; blocked on List/Text lowering ([#7](https://github.com/kofun-lang/kofun-boot/issues/7)) | [#50](https://github.com/kofun-lang/kofun-boot/issues/50) |
 | `LATERAL` shape compilation, per-relation split | yes, one relation; PostgreSQL's own statement log shows 1 and 2 statements at every N, against N + 1 per row | `modules/loader`, `contracts/shapes.sql`, `tests/loader/postgres.sh` ([#49](https://github.com/kofun-lang/kofun-boot/issues/49)) |
 | database capability, transactions, digest marker | no | [#51](https://github.com/kofun-lang/kofun-boot/issues/51) |

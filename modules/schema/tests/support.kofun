@@ -1,0 +1,54 @@
+# Helpers the schema suites share. Not a suite itself: scripts/test-modules.sh
+# puts every non-suite file in tests/ into each of the module's suites, after
+# the core and before the suite's own tests.
+
+# Single-table steps, applied with no second table in the database.
+fn apply_alone(schema: Schema, step: Migration) -> SchemaStep {
+    return apply(schema, empty_schema(), step)
+}
+
+fn users_table() -> Schema {
+    return step_schema(apply_alone(empty_schema(), history_step(1)))
+}
+
+fn with_email() -> Schema {
+    return step_schema(apply_alone(users_table(), history_step(2)))
+}
+
+fn add(key: Int, label: Int, nullable: Int, policy: Int) -> Migration {
+    return migration(
+        step_add_column(), table_users(), key, label, kind_text(), nullable,
+        policy
+    )
+}
+
+fn rename(key: Int, label: Int) -> Migration {
+    return migration(
+        step_rename_column(), table_users(), key, label, 0, 0, policy_none()
+    )
+}
+
+fn drop(key: Int, policy: Int) -> Migration {
+    return migration(step_drop_column(), table_users(), key, 0, 0, 0, policy)
+}
+
+fn set_nullable(key: Int, nullable: Int, policy: Int) -> Migration {
+    return migration(
+        step_set_nullable(), table_users(), key, 0, 0, nullable, policy
+    )
+}
+
+# Field reads need a bound record in this slice, so a planned step's kind is
+# read through a binding rather than off the call.
+fn planned_kind(current: Schema, desired: Schema, key: Int) -> Int {
+    let step: Migration = plan(current, desired, key)
+    return step.kind
+}
+
+fn kind_of(step: SchemaStep) -> Int {
+    return outcome_kind(step_outcome(step))
+}
+
+fn payload_of(step: SchemaStep) -> Int {
+    return outcome_payload(step_outcome(step))
+}

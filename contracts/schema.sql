@@ -10,5 +10,11 @@ create table users (
     display_name text, -- key 3
     primary key (id)
 );
+-- users: retired keys, never to be reissued: 4
 
--- retired keys, never to be reissued: 4
+create table posts (
+    id bigint not null, -- key 1
+    author_id bigint not null references users (id), -- key 2
+    views bigint, -- key 3
+    primary key (id)
+);
