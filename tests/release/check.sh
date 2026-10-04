@@ -182,6 +182,57 @@ while IFS= read -r pillar; do
         fail "README claims '$pillar' holds today, but its gate $gate does not exist"
 done <"$WORK/readme.holds"
 
+# ------------------------------------- released migrations are append-only
+#
+# A database migrated past a released step has run that step's SQL. Editing
+# it later keeps the schema gate green — the history still replays to the
+# declaration — while every database already past it silently disagrees. The
+# lock pins each released step's SQL by digest; see scripts/migrations-lock.sh.
+
+LOCKER="$ROOT/scripts/migrations-lock.sh"
+test -f "$LOCKER" || fail 'scripts/migrations-lock.sh is missing'
+lock_report=$(sh "$LOCKER" check) || fail 'a released migration step changed; see the line above'
+
+# Proved able to fail, in a scratch copy: lock every step, then change one
+# statement, reword one comment, and drop the last step.
+mkdir -p "$WORK/lock"
+cp "$ROOT/contracts/migrations.sql" "$WORK/lock/migrations.sql"
+printf '# scratch lock\n' >"$WORK/lock/migrations.lock"
+lock_run() {
+    MIGRATIONS_SQL="$WORK/lock/$1" MIGRATIONS_LOCK="$WORK/lock/migrations.lock" \
+        sh "$LOCKER" "$2" ${3:-}
+}
+lock_run migrations.sql release 0.0.1 >/dev/null ||
+    fail 'the migration lock could not lock a scratch copy of the history'
+lock_run migrations.sql check >/dev/null ||
+    fail 'a freshly locked history does not check'
+
+sed '0,/^alter table users add column email text;$/s//alter table users add column email varchar;/' \
+    "$WORK/lock/migrations.sql" >"$WORK/lock/edited.sql"
+cmp -s "$WORK/lock/migrations.sql" "$WORK/lock/edited.sql" &&
+    fail 'the edited-step break changed nothing; its sed no longer matches contracts/migrations.sql'
+if lock_run edited.sql check >"$WORK/lock/edited.log" 2>&1; then
+    fail 'an edited released migration step passed the lock'
+fi
+grep -Fq 'history step 2 was released at v0.0.1 and has changed' "$WORK/lock/edited.log" ||
+    fail "the edited released step was not named: $(cat "$WORK/lock/edited.log")"
+
+sed 's/^-- step 2: add column (key 2)$/-- step 2: add column (key 2), reworded/' \
+    "$WORK/lock/migrations.sql" >"$WORK/lock/comment.sql"
+cmp -s "$WORK/lock/migrations.sql" "$WORK/lock/comment.sql" &&
+    fail 'the comment break changed nothing; its sed no longer matches contracts/migrations.sql'
+lock_run comment.sql check >/dev/null 2>&1 ||
+    fail 'rewording a projection comment was read as a change to a released step'
+
+last=$(sed -n 's/^-- step \([0-9][0-9]*\):.*/\1/p' "$WORK/lock/migrations.sql" | tail -1)
+sed "/^-- step $last:/,\$d" "$WORK/lock/migrations.sql" >"$WORK/lock/dropped.sql"
+if lock_run dropped.sql check >"$WORK/lock/dropped.log" 2>&1; then
+    fail 'a released migration step removed from the history passed the lock'
+fi
+grep -Fq "history step $last was released at v0.0.1 and is missing from the history" \
+    "$WORK/lock/dropped.log" ||
+    fail "the removed released step was not named: $(cat "$WORK/lock/dropped.log")"
+
 # ------------------------------------------------------------ the tag
 
 tag="v$version"
@@ -198,4 +249,6 @@ if [ -s "$WORK/readme.unmeasured" ]; then
 else
     printf 'release: every bar is measured\n'
 fi
+printf 'release: %s\n' "$lock_report"
 printf 'release: PASS: version, dated section, declared unmeasured set matches README, gates exist\n'
+printf 'release: PASS: released migration steps are unchanged; an edited or removed one is named\n'

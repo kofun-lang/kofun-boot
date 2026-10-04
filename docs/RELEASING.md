@@ -62,12 +62,15 @@ Then, once both are green:
 
 1. `VERSION` holds the new version, and `CHANGELOG.md` has its section, dated,
    with an `### Unmeasured at this release` list matching the README.
-2. Merge to `main`.
-3. Tag the merge commit: `git tag -a v$(cat VERSION) -m "..."`, and push it.
-4. Publish the GitHub Release from that tag, with the CHANGELOG section as the
+2. `sh scripts/migrations-lock.sh release $(cat VERSION)` locks every
+   migration step not yet released, and the updated `contracts/migrations.lock`
+   is committed with the release. From then on those steps are append-only.
+3. Merge to `main`.
+4. Tag the merge commit: `git tag -a v$(cat VERSION) -m "..."`, and push it.
+5. Publish the GitHub Release from that tag, with the CHANGELOG section as the
    body and the research pack attached.
 
-Step 4 is the only step that reaches outside the repository, and it is
+Step 5 is the only step that reaches outside the repository, and it is
 deliberately last and manual. Everything before it is reversible.
 
 ## What the gate checks
@@ -84,11 +87,23 @@ deliberately last and manual. Everything before it is reversible.
    exists in the tree — a claim whose gate was deleted is a claim with nothing
    behind it.
 7. The tag that would be created does not already exist.
+8. **No released migration step has changed.** Each line of
+   `contracts/migrations.lock` pins a released step's executable SQL by digest.
+   A changed or removed step fails, naming the step and the version that
+   released it. Rewording a comment in the projection is not a change, and
+   unreleased steps are listed rather than refused.
 
 And, as everywhere else here, the gate is verified in both directions: it
 proves it fails when a bar is dropped from the CHANGELOG, when a bar is added
 that the README does not have, and when the version is bumped to `1.0.0` while
 a bar is still unmeasured.
+
+For the migration lock, the demonstration runs on every gate run, in a
+scratch copy. It locks the whole history, and then shows three things:
+
+- editing one statement fails, naming the step;
+- dropping the last step fails, naming the step;
+- rewording a comment passes.
 
 ## What a release is not
 

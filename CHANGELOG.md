@@ -72,6 +72,16 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
   - a sequential application;
   - an uncoalesced interpreter;
   - a lost dedupe.
+- **Released migration history is append-only**
+  ([#52](https://github.com/kofun-lang/kofun-boot/issues/52)).
+  - `scripts/migrations-lock.sh release VERSION` pins each released step's
+    executable SQL by digest in `contracts/migrations.lock`.
+  - `tests/release/check.sh` refuses a released step that changed or
+    disappeared, naming the step and the version that released it.
+  - Rewording a projection comment is not a change.
+  - The gate proves all three directions in a scratch copy on every run.
+  - No version has shipped the schema yet, so all seven steps are listed as
+    unreleased.
 - **Two pillars in the README table**, each mapped to its gate in
   `tests/release/check.sh`:
   - *Schema as a contract*
