@@ -437,9 +437,27 @@ Marlow、Brandy、Coens、Purdy の論文
 - interpreter の合流を外す
 - 重複 key の除去を外す
 
+**実際の PostgreSQL でも測った。** 宣言 shape は build 時に SQL へ compile する
+（`contracts/shapes.sql`）。
+
+- join: `LEFT JOIN LATERAL` + `json_agg` の一文
+- split: 階層ごとの文
+
+`tests/loader/postgres.sh` は、使い捨ての cluster を `log_statement = 'all'` で
+起動する。文数は、この script ではなく **server 自身のログ** から数える。
+
+| 書き方 | server が数えた文数 N=1..4 |
+|---|---|
+| join shape | 1 1 1 1 |
+| split shape | 2 2 2 2 |
+| 一行ずつ（対照） | 2 3 4 5 |
+
+三つとも、N ごとに seed と同じ答えを返す。`LATERAL` の無い方言（SQLite）では、
+join は relation を名指しして build 時に拒否される。
+
 続きは issue にした。
 
-- `LATERAL` への compile と関係ごとの分割: [#49](https://github.com/kofun-lang/kofun-boot/issues/49)
+- 複数 relation の shape と、relation ごとの分割の選択: [#49](https://github.com/kofun-lang/kofun-boot/issues/49) の続き
 - 型付き query 値: [#50](https://github.com/kofun-lang/kofun-boot/issues/50)
 
 今回の実装は [#46](https://github.com/kofun-lang/kofun-boot/issues/46) である。

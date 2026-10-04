@@ -69,14 +69,16 @@ jobs:
       - run: sh tests/loader/check.sh
 
   schema-postgres:
-    name: Schema — both SQL projections build the same PostgreSQL database
+    name: PostgreSQL — the SQL projections build one database, and shapes cost the same at every N
     runs-on: ubuntu-latest
     env:
-      # The check reports SKIP on a machine without PostgreSQL. Here that
+      # The checks report SKIP on a machine without PostgreSQL. Here that
       # would be a gate that is not running, so it is a failure instead.
       SCHEMA_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: true
       - name: Ensure PostgreSQL server binaries
         run: |
           if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
@@ -84,6 +86,7 @@ jobs:
             sudo apt-get install -y postgresql
           fi
       - run: sh tests/schema/postgres.sh
+      - run: sh tests/loader/postgres.sh
 
   research-pack:
     name: Deterministic research ZIP

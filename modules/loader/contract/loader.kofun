@@ -67,3 +67,42 @@ fn loader_coalesce(round: Round) -> Batch {
 fn loader_scales(counts: List[Int]) -> Bool {
     ...
 }
+
+# A declared nested read.  `Join` compiles the relation into one statement
+# (LEFT JOIN LATERAL with a JSON aggregate); `Split` compiles one statement
+# per level.  The choice is per relation, because joining sibling collections
+# multiplies rows.
+type Load =
+    | Join
+    | Split
+
+type Relation = {
+    name: Text,
+    table: Text,
+    foreign_key: Text,
+    load: Load,
+}
+
+type Shape = {
+    root: Text,
+    relations: List[Relation],
+}
+
+# What the target dialect can compile.  A missing capability is a build-time
+# refusal naming the relation, never a silent fallback with a different
+# statement count.
+type DialectCapabilities = {
+    lateral: Bool,
+    json_agg: Bool,
+}
+
+type ShapeOutcome =
+    | Compiled(statements: Int)
+    | NeedsLateral(relation: Int)
+
+fn loader_compile_shape(
+    shape: Shape,
+    dialect: DialectCapabilities
+) -> ShapeOutcome {
+    ...
+}

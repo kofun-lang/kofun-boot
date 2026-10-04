@@ -434,3 +434,108 @@ fn grows_with_n(at_smallest: Int, at_largest: Int) -> Int {
     }
     return 0
 }
+
+# ---------------------------------------------------------------- shapes
+#
+# A declared shape is a nested read written once, as a value, and compiled at
+# build time to a number of statements that is a property of the shape and
+# never of the data. Two ways to load its relation:
+#
+#   join   one statement: the relation is a LEFT JOIN LATERAL subquery that
+#          aggregates the child rows into JSON — what Drizzle's relational
+#          queries, Prisma's relationLoadStrategy "join", Hasura, and PostgREST
+#          embedding all compile to.
+#   split  one statement per level: the roots, then every child of every root
+#          in one `= any($1)` statement. Chosen per relation when joining
+#          sibling collections would multiply rows.
+#
+# The target dialect is a capability, not an assumption. A join on a dialect
+# without LATERAL is refused at build time, naming the relation, instead of
+# silently falling back to something with a different statement count.
+# Prisma 8 makes the same choice for its `includeMany`.
+
+fn relation_posts() -> Int {
+    return 1
+}
+
+fn table_authors() -> Int {
+    return 1
+}
+
+fn load_join() -> Int {
+    return 1
+}
+
+fn load_split() -> Int {
+    return 2
+}
+
+fn dialect_postgresql() -> Int {
+    return 1
+}
+
+fn dialect_sqlite() -> Int {
+    return 2
+}
+
+# Authors, each with the ids of their posts.
+type Shape = {
+    root: Int,
+    relation: Int,
+    load: Int,
+}
+
+# What a target can compile. Only LATERAL is modelled; a dialect is a record so
+# the next capability is a field, not a new branch in every caller.
+type Dialect = {
+    name: Int,
+    lateral: Int,
+}
+
+type ShapeOutcome =
+    | Compiled(statements: Int)
+    | NeedsLateral(relation: Int)
+
+fn shape(load: Int) -> Shape {
+    let declared: Shape = Shape(root: table_authors(), relation: relation_posts(), load: load)
+    return declared
+}
+
+fn dialect(name: Int) -> Dialect {
+    let mut lateral = 0
+    if name == dialect_postgresql() {
+        lateral = 1
+    }
+    let target: Dialect = Dialect(name: name, lateral: lateral)
+    return target
+}
+
+# A shape of one relation level. A join is one statement; a split is one per
+# level, the roots and then the relation.
+fn compile_shape(declared: Shape, target: Dialect) -> ShapeOutcome {
+    if declared.load == load_join() {
+        if target.lateral == 0 {
+            return NeedsLateral(declared.relation)
+        }
+        return Compiled(1)
+    }
+    return Compiled(2)
+}
+
+fn shape_outcome_kind(result: ShapeOutcome) -> Int {
+    let mut kind = 0
+    match result {
+        Compiled(_) => { kind = 1 },
+        NeedsLateral(_) => { kind = 2 },
+    }
+    return kind
+}
+
+fn shape_outcome_payload(result: ShapeOutcome) -> Int {
+    let mut payload = 0
+    match result {
+        Compiled(statements) => { payload = statements },
+        NeedsLateral(relation) => { payload = relation },
+    }
+    return payload
+}

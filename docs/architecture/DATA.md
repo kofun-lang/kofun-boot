@@ -206,7 +206,7 @@ below.
 | multiple tables, foreign keys | no | [#47](https://github.com/kofun-lang/kofun-boot/issues/47) |
 | kind changes | no | [#48](https://github.com/kofun-lang/kofun-boot/issues/48) |
 | typed query values, row codecs, result types from selections | no; blocked on List/Text lowering ([#7](https://github.com/kofun-lang/kofun-boot/issues/7)) | [#50](https://github.com/kofun-lang/kofun-boot/issues/50) |
-| `LATERAL` shape compilation, per-relation split | no | [#49](https://github.com/kofun-lang/kofun-boot/issues/49) |
+| `LATERAL` shape compilation, per-relation split | yes, one relation; PostgreSQL's own statement log shows 1 and 2 statements at every N, against N + 1 per row | `modules/loader`, `contracts/shapes.sql`, `tests/loader/postgres.sh` ([#49](https://github.com/kofun-lang/kofun-boot/issues/49)) |
 | database capability, transactions, digest marker | no | [#51](https://github.com/kofun-lang/kofun-boot/issues/51) |
 | released history is append-only | no | [#52](https://github.com/kofun-lang/kofun-boot/issues/52) |
 

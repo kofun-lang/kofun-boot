@@ -75,8 +75,19 @@ All three return the same answer. Three break tests show the gate failing:
 - the interpreter's coalescing removed;
 - the duplicate-key removal dropped.
 
+Declared shapes compile to SQL ([#49](https://github.com/kofun-lang/kofun-boot/issues/49)):
+one `LEFT JOIN LATERAL` + `json_agg` statement for a join, and one statement
+per level for a split. `tests/loader/postgres.sh` counts what clients sent
+from PostgreSQL's own statement log, at N = 1..4 authors:
+
+| run | statements |
+|---|---|
+| join | 1 1 1 1 |
+| split | 2 2 2 2 |
+| per-row control | 2 3 4 5 |
+
+All three give identical answers.
+
 What remains is filed as issues:
 
-- shape compilation to `LATERAL` SQL, and per-relation split strategies:
-  [#49](https://github.com/kofun-lang/kofun-boot/issues/49);
 - typed query values, blocked on List/Text lowering: [#50](https://github.com/kofun-lang/kofun-boot/issues/50).

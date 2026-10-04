@@ -14,6 +14,7 @@ set -eu
 #   scripts/dev.sh --research build the deterministic research ZIP
 #   scripts/dev.sh --client   print the typed client the route table projects
 #   scripts/dev.sh --schema   print the DDL and migration SQL the schema projects
+#   scripts/dev.sh --shapes   print the SQL the loader's declared shapes compile to
 #   scripts/dev.sh --scaffold generate a project and run its gate
 #   scripts/dev.sh --replay   replay the recorded session trace
 #   scripts/dev.sh --bench    measure, or refuse if the machine is busy
@@ -100,6 +101,10 @@ case "${1:-}" in
         printf '\n'
         sh "$ROOT/scripts/ddl.sh" migrations "$binary"
         ;;
+    --shapes)
+        binary=$(SEED=loader sh "$ROOT/scripts/build-seed.sh" "$ROOT/build/loader")
+        sh "$ROOT/scripts/shape-sql.sh" shapes "$binary"
+        ;;
     --bench)
         shift
         sh "$ROOT/scripts/bench.sh" "${1:-record}"
@@ -129,6 +134,7 @@ case "${1:-}" in
         sh "$ROOT/tests/schema/check.sh"
         sh "$ROOT/tests/schema/postgres.sh"
         sh "$ROOT/tests/loader/check.sh"
+        sh "$ROOT/tests/loader/postgres.sh"
         sh "$ROOT/tests/research/check.sh"
         sh "$ROOT/tests/integration/serve.sh"
         sh "$ROOT/tests/scaffold/check.sh"

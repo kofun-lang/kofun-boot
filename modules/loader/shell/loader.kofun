@@ -16,6 +16,11 @@
 #             at N = 1, statements at N = capacity, and 1 when the count
 #             grows with N — the N+1 detector, run by the binary itself
 #   coalesce  a count, then two lines per probe round: statements keys
+#   shapes    a count, then five lines per (shape, dialect):
+#             load dialect outcome payload lateral
+#             outcome 1 is Compiled(statements), 2 is NeedsLateral(relation)
+#   database  the seed's data, for the real-database check: the author
+#             capacity, then the post count of each author
 #
 # tests/loader/check.sh reads the requests section and refuses any strategy
 # the application ships with whose statement count grows with N.
@@ -191,6 +196,27 @@ fn emit_coalesced(round: Round) -> Int {
     return 0
 }
 
+fn emit_shape(load: Int, name: Int) -> Int {
+    let target: Dialect = dialect(name)
+    let result: ShapeOutcome = compile_shape(shape(load), target)
+    print(load)
+    print(name)
+    print(shape_outcome_kind(result))
+    print(shape_outcome_payload(result))
+    print(target.lateral)
+    return 0
+}
+
+fn emit_database() -> Int {
+    let db: Database = database(capacity())
+    print(db.authors)
+    print(db.p1)
+    print(db.p2)
+    print(db.p3)
+    print(db.p4)
+    return 0
+}
+
 fn main() -> Int {
     print("kofun-boot loader")
     print("contract")
@@ -233,6 +259,18 @@ fn main() -> Int {
     # An empty round sends nothing.
     emit_coalesced(empty_round())
     print("end coalesce")
+
+    print("shapes")
+    print(4)
+    emit_shape(load_join(), dialect_postgresql())
+    emit_shape(load_split(), dialect_postgresql())
+    emit_shape(load_join(), dialect_sqlite())
+    emit_shape(load_split(), dialect_sqlite())
+    print("end shapes")
+
+    print("database")
+    emit_database()
+    print("end database")
 
     return 0
 }

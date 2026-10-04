@@ -82,6 +82,21 @@ written down layer by layer against Spring Boot, Next.js, Prisma, and Drizzle.
   - The gate proves all three directions in a scratch copy on every run.
   - No version has shipped the schema yet, so all seven steps are listed as
     unreleased.
+- **Declared shapes compile to a fixed number of statements, measured by
+  PostgreSQL** ([#49](https://github.com/kofun-lang/kofun-boot/issues/49)).
+  - The loader core decides what a shape compiles to on a dialect:
+    - a join is `Compiled(1)` where `LATERAL` exists, and `NeedsLateral(relation)`
+      where it does not;
+    - a split is one statement per level.
+  - `scripts/shape-sql.sh` projects `contracts/shapes.sql`: a `LEFT JOIN LATERAL`
+    + `json_agg` statement, and the split pair. It refuses a join for SQLite by
+    naming the relation.
+  - `tests/loader/postgres.sh` seeds N = 1..4 authors and has the server log
+    every statement (`log_statement = 'all'`, prefixed by application name).
+    It requires join 1 1 1 1, split 2 2 2 2, a per-row control of 2 3 4 5, and
+    identical answers.
+  - `tests/lib/postgres.sh` is the throwaway cluster that both real-database
+    checks now share.
 - **Two pillars in the README table**, each mapped to its gate in
   `tests/release/check.sh`:
   - *Schema as a contract*

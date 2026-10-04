@@ -61,7 +61,12 @@ for declaration in \
     'type Batch = {' \
     'type LoadOutcome =' \
     'fn loader_coalesce(' \
-    'fn loader_scales('
+    'fn loader_scales(' \
+    'type Load =' \
+    'type Shape = {' \
+    'type DialectCapabilities = {' \
+    'type ShapeOutcome =' \
+    'fn loader_compile_shape('
 do
     require_line 'the canonical loader surface lost a declaration' \
         "$declaration" "$contract"
@@ -71,12 +76,14 @@ require_line 'a canonical statement no longer carries the keys it sends' \
 require_line 'the canonical sources lost the declared shape' \
     '| Shape(name: Text)' "$contract"
 
-sed -n '/^type LoadOutcome =$/,/^$/p' "$contract" >"$WORK/contract.block"
-sed -n '/^type LoadOutcome =$/,/^$/p' "$core" >"$WORK/core.block"
-test -s "$WORK/core.block" || fail 'the seed no longer declares LoadOutcome'
-cmp -s "$WORK/contract.block" "$WORK/core.block" ||
-    fail "LoadOutcome differs between the canonical contract and the seed:
+for block in 'type LoadOutcome =' 'type ShapeOutcome ='; do
+    sed -n "/^$block\$/,/^\$/p" "$contract" >"$WORK/contract.block"
+    sed -n "/^$block\$/,/^\$/p" "$core" >"$WORK/core.block"
+    test -s "$WORK/core.block" || fail "the seed no longer declares $block"
+    cmp -s "$WORK/contract.block" "$WORK/core.block" ||
+        fail "$block differs between the canonical contract and the seed:
 $(diff "$WORK/contract.block" "$WORK/core.block")"
+done
 
 if "$KOFUN" check "$contract" >"$WORK/contract.stdout" 2>"$WORK/contract.stderr"; then
     fail 'the canonical loader contract unexpectedly claimed executable codegen'
@@ -215,8 +222,33 @@ probe 1 'a key asked for twice in one round is sent once' '1 2'
 probe 2 'three sources in one round are three statements' '3 1'
 probe 3 'an empty round sends nothing' '0 0'
 
+# Shapes: a join is one statement where the dialect has LATERAL, and refused
+# by name where it does not; a split is one statement per level everywhere.
+# Rows are load dialect outcome payload lateral; outcome 1 is Compiled, 2 is
+# NeedsLateral.
+section shapes >"$WORK/shapes"
+test "$(sed -n 1p "$WORK/shapes")" = 4 || fail 'expected four (shape, dialect) rows'
+shape_row() {
+    sed -n '2,$p' "$WORK/shapes" | paste - - - - - | sed -n "$1p" | tr '\t' ' '
+}
+test "$(shape_row 1)" = '1 1 1 1 1' ||
+    fail "a joined shape on postgresql is not one statement: $(shape_row 1)"
+test "$(shape_row 2)" = '2 1 1 2 1' ||
+    fail "a split shape on postgresql is not one statement per level: $(shape_row 2)"
+test "$(shape_row 3)" = '1 2 2 1 0' ||
+    fail "a join on a dialect without LATERAL was not refused naming its relation: $(shape_row 3)"
+test "$(shape_row 4)" = '2 2 1 2 0' ||
+    fail "a split shape on sqlite is not one statement per level: $(shape_row 4)"
+# The shipped declared-shape strategy costs exactly what the shape compiles to.
+test "$(statements 3 | cut -d' ' -f1)" = "$(shape_row 1 | cut -d' ' -f4)" ||
+    fail 'the declared-shape strategy and the shape it declares disagree about the statement count'
+
+section database >"$WORK/database"
+test "$(tr '\n' ' ' <"$WORK/database")" = '4 3 1 4 1 ' ||
+    fail "the seed database is not four authors with 3 1 4 1 posts: $(tr '\n' ' ' <"$WORK/database")"
+
 lines=$(wc -l <"$WORK/out" | tr -d ' ')
-test "$lines" -eq 117 || fail "the decisions above cover the whole report: expected 117 lines, got $lines"
+test "$lines" -eq 147 || fail "the decisions above cover the whole report: expected 147 lines, got $lines"
 cmp -s "$expected" "$WORK/out" ||
     fail "named decisions passed but the recorded loader golden still differs:
 $(diff "$expected" "$WORK/out" | head -20)"
@@ -224,6 +256,49 @@ $(diff "$expected" "$WORK/out" | head -20)"
 printf 'loader: every strategy loads the same answer at every N: PASS\n'
 printf 'loader: the shipped strategy costs the same statements at every N, and N+1 is flagged: PASS\n'
 printf 'loader: one statement per source, each key sent once: PASS\n'
+printf 'loader: a join is one statement where LATERAL exists and refused by name where it does not: PASS\n'
+
+# ------------------------------------------------------ the shape projection
+#
+# contracts/shapes.sql is what the shapes look like in PostgreSQL. It is the
+# projection of what the binary printed, never an edit, and each block holds
+# as many statements as the binary said its shape compiles to.
+
+shapes_sql=${LOADER_SHAPES_SQL:-"$ROOT/contracts/shapes.sql"}
+sh "$ROOT/scripts/shape-sql.sh" shapes "$WORK/loader" >"$WORK/shapes.sql" ||
+    fail 'the shape projection refused the binary output'
+env -i PATH="$PATH" TZ=Pacific/Kiritimati LC_ALL=C \
+    sh "$ROOT/scripts/shape-sql.sh" shapes "$WORK/loader" >"$WORK/shapes.bare.sql"
+cmp -s "$WORK/shapes.sql" "$WORK/shapes.bare.sql" ||
+    fail 'the shape projection changed under a hostile environment'
+test -f "$shapes_sql" || fail 'contracts/shapes.sql is missing; run scripts/shape-sql.sh shapes'
+cmp -s "$shapes_sql" "$WORK/shapes.sql" ||
+    fail "contracts/shapes.sql is not the projection of the shapes the binary printed:
+$(diff "$shapes_sql" "$WORK/shapes.sql" | head -20)"
+for load in join split; do
+    printed=$(awk -v load="$load" '
+        $0 ~ ("load " load ":") { inside = 1; next }
+        /^-- shape:/ { inside = 0 }
+        inside && /;$/ { n++ }
+        END { print n + 0 }
+    ' "$WORK/shapes.sql")
+    case $load in
+        join) declared=$(shape_row 1 | cut -d' ' -f4) ;;
+        split) declared=$(shape_row 2 | cut -d' ' -f4) ;;
+    esac
+    test "$printed" = "$declared" ||
+        fail "the $load shape's SQL holds $printed statements, but the binary says it compiles to $declared"
+done
+if sh "$ROOT/scripts/shape-sql.sh" shapes --dialect sqlite "$WORK/loader" \
+    >"$WORK/sqlite.sql" 2>"$WORK/sqlite.err"
+then
+    fail 'the shape projection produced SQL for a join on a dialect without LATERAL'
+fi
+require_line 'the sqlite refusal does not name the relation' \
+    'a join of relation posts cannot compile for sqlite: it has no LATERAL' "$WORK/sqlite.err"
+test ! -s "$WORK/sqlite.sql" || fail 'the shape projection printed SQL before refusing'
+
+printf 'loader: contracts/shapes.sql is the projection, and each block holds the statements its shape compiles to: PASS\n'
 
 # ------------------------------------------------------------ break tests
 
@@ -268,4 +343,26 @@ if test "${LOADER_SKIP_BREAK_TEST:-0}" != 1; then
         "a key asked for twice in one round is sent once: expected '1 2'"
 
     printf 'loader: a sequential application, an uncoalesced interpreter, and a lost dedupe fail by name: PASS\n'
+
+    # A compiler that forgets to ask the dialect: a join "compiles" on a
+    # target with no LATERAL, which is the silent fallback the refusal exists
+    # to prevent.
+    loader_break lateral-ignored \
+        's/^        if target.lateral == 0 {$/        if target.lateral == 9 {/' \
+        'a join on a dialect without LATERAL was not refused naming its relation'
+
+    # A hand-edited projection.
+    cp "$shapes_sql" "$breaks/shapes.sql"
+    sed -i 's/^order by a.id;$/order by a.id desc;/' "$breaks/shapes.sql"
+    cmp -s "$shapes_sql" "$breaks/shapes.sql" &&
+        fail 'the shapes hand-edit break changed nothing; its sed no longer matches contracts/shapes.sql'
+    if LOADER_SHAPES_SQL="$breaks/shapes.sql" LOADER_SKIP_BREAK_TEST=1 sh "$0" \
+        >"$breaks/shapes.log" 2>&1
+    then
+        fail 'a hand-edited contracts/shapes.sql did not break the gate'
+    fi
+    require_line 'the hand-edited shapes were not named' \
+        'contracts/shapes.sql is not the projection' "$breaks/shapes.log"
+
+    printf 'loader: a compiler that ignores the dialect and a hand-edited shape fail by name: PASS\n'
 fi

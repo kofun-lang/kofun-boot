@@ -266,3 +266,44 @@ fn test_the_shipped_strategy_does_not_grow_with_n() -> Int {
     let largest: Int = statements_from(app_strategy(), fresh(), capacity(), 0)
     return expect_eq_int(grows_with_n(smallest, largest), 0)
 }
+
+# ---------------------------------------------------------------- shapes
+
+fn test_a_joined_shape_is_one_statement_on_a_dialect_with_lateral() -> Int {
+    let result: ShapeOutcome = compile_shape(shape(load_join()), dialect(dialect_postgresql()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(shape_outcome_kind(result), 1)
+    failures = failures + expect_eq_int(shape_outcome_payload(result), 1)
+    return failures
+}
+
+fn test_a_split_shape_is_one_statement_per_level_on_any_dialect() -> Int {
+    let on_postgresql: ShapeOutcome = compile_shape(shape(load_split()), dialect(dialect_postgresql()))
+    let on_sqlite: ShapeOutcome = compile_shape(shape(load_split()), dialect(dialect_sqlite()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(shape_outcome_payload(on_postgresql), 2)
+    failures = failures + expect_eq_int(shape_outcome_payload(on_sqlite), 2)
+    return failures
+}
+
+# No silent fallback: a join the target cannot express is refused, naming the
+# relation, rather than quietly becoming a split with a different count.
+fn test_a_join_without_lateral_is_refused_naming_the_relation() -> Int {
+    let result: ShapeOutcome = compile_shape(shape(load_join()), dialect(dialect_sqlite()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(shape_outcome_kind(result), 2)
+    failures = failures + expect_eq_int(shape_outcome_payload(result), relation_posts())
+    return failures
+}
+
+# The declared-shape strategy the application runs costs exactly what its
+# shape compiles to: the request's count and the shape's count are one number.
+fn test_the_shape_strategy_costs_what_the_shape_compiles_to() -> Int {
+    let compiled: ShapeOutcome = compile_shape(shape(load_join()), dialect(dialect_postgresql()))
+    let mut failures = 0
+    failures = failures + expect_eq_int(
+        statements_from(strategy_shape(), fresh(), capacity(), 0),
+        shape_outcome_payload(compiled)
+    )
+    return failures
+}

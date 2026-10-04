@@ -35,6 +35,7 @@ cd ../my-app && sh tests/check.sh      # its own gate: boundary, suite, golden, 
 | `sh scripts/dev.sh --research` | deterministic framework-research ZIP + SHA-256 |
 | `sh scripts/dev.sh --client` | the typed client the route table projects |
 | `sh scripts/dev.sh --schema` | the DDL and migration SQL the schema projects |
+| `sh scripts/dev.sh --shapes` | the SQL the loader's declared shapes compile to |
 | `sh scripts/dev.sh --scaffold` | generate a project and run its gate |
 | `sh scripts/dev.sh --replay` | replay the recorded session trace |
 | `sh scripts/dev.sh --release` | verify the release is coherent; tag nothing |
@@ -323,6 +324,22 @@ The gate runs one request, authors with their post counts, at N = 1 to 4:
 All three strategies load the same answer. The sequential one stays in the
 output so the detector is shown to fire on every run.
 
+A declared shape compiles at build time to a fixed number of statements:
+
+- **join**: one `LEFT JOIN LATERAL` statement with `json_agg`, refused by name
+  on a dialect without `LATERAL`;
+- **split**: one statement per level.
+
+`contracts/shapes.sql` is the projection. `tests/loader/postgres.sh` then asks
+PostgreSQL itself. With `log_statement = 'all'`, the server's log counts what
+each client sent for N = 1..4 authors:
+
+```
+loader-postgres: statements counted by the server for N = 1 2 3 4: join 1 1 1 1; split 2 2 2 2; per-row 2 3 4 5
+```
+
+All three answer exactly as the seed does at every N.
+
 ## Testing, which is most of the reason to pick a framework
 
 **Unit tests need no server.** kotest pairs module-owned tests with their
@@ -388,7 +405,9 @@ number quoted; hand-editing the OpenAPI document fails with the diff.
 | `tests/boot/check.sh` | contract/seed correspondence, dispatch decisions, projection, determinism |
 | `tests/schema/check.sh` | schema decisions read from the binary, SQL projections, break tests |
 | `tests/schema/postgres.sh` | both SQL projections build the same PostgreSQL database |
-| `tests/loader/check.sh` | statements independent of N, coalescing, break tests |
+| `tests/loader/check.sh` | statements independent of N, coalescing, shape compilation, break tests |
+| `tests/loader/postgres.sh` | the server's own statement log: shapes cost the same at every N, per-row costs N + 1 |
+| `tests/lib/postgres.sh` | the throwaway PostgreSQL cluster both real-database checks share |
 | `tests/integration/serve.sh` | a real server on a real socket |
 | `tests/scaffold/check.sh` | `boot new`'s output, generated and gated every run |
 | `tests/release/check.sh` | the release gate: the declared unmeasured set must match the pillar table |

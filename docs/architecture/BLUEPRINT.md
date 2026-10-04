@@ -263,6 +263,15 @@ Django の `assertNumQueries` は一つの fixture で数を固定する。
 - interpreter の合流を外す
 - 重複 key の除去を外す
 
+**実際の DB でも測る**（`tests/loader/postgres.sh`、#49）。PostgreSQL を
+`log_statement = 'all'` で起動し、server 自身のログで文数を数える。
+
+- 宣言 shape の join は 1 1 1 1
+- split は 2 2 2 2
+- 一行ずつの対照は 2 3 4 5
+
+答えは三つとも同じである。
+
 ## 6. Cache — 推測された key を持たない
 
 **Next.js から学ぶこと。** cache の既定値が三回変わった。
